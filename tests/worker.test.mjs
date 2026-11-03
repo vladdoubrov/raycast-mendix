@@ -1,0 +1,160 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, access } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { promisify } from 'node:util';
+import { execFile } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+const exec = promisify(execFile);
+const worker = fileURLToPath(new URL('../assets/checkout-worker.ps1', import.meta.url));
+const appId = '00000000-0000-4000-8000-000000000001';
+const ps = process.env.MX_TEST_POWERSHELL || 'powershell.exe';
+const git = async (dir, ...args) => (await exec('git', ['-C', dir, ...args], { windowsHide: true, env: { ...process.env, GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' } })).stdout.trim();
+
+test('worker integration: full, warm, seeded, partial, cancellation and safe failure', { skip: process.platform !== 'win32', timeout: 240000 }, async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'mx-worker-test-'));
+  const source = path.join(root, 'source');
+  const remote = path.join(root, 'remote.git');
+  const projectsRoot = path.join(root, 'projects with spaces é');
+  const cacheRoot = path.join(root, '.mendix-switcher-cache', 'v1', appId);
+  try {
+    await mkdir(source); await mkdir(projectsRoot);
+    await git(source, 'init', '-b', 'main');
+    await git(source, 'config', 'core.autocrlf', 'false');
+    await writeFile(path.join(source, 'App.mpr'), 'fixture only\n');
+    await writeFile(path.join(source, 'readme.txt'), 'LF content\n');
+    await git(source, 'add', '.'); await git(source, 'commit', '-m', 'fixture');
+    await git(source, 'notes', '--ref=mx_metadata', 'add', '-m', 'fixture notes');
+    await git(source, 'branch', 'feature/café');
+    await git(source, 'tag', 'fixture-v1');
+    await git(root, 'clone', '--bare', source, remote);
+    await git(remote, 'config', 'uploadpack.allowFilter', 'true');
+    await git(source, 'push', remote, 'refs/notes/mx_metadata');
+    const remoteUrl = pathToFileURL(remote).href + '/';
+    let counter = 0;
+    async function run(overrides = {}, cancel = false, { noLaunch = true } = {}) {
+      const operationId = randomUUID();
+      const directory = path.join(root, 'operations', operationId);
+      await mkdir(directory, { recursive: true });
+      const request = { schemaVersion: 1, operationId, appId, appName: 'App', action: 'checkout', remoteUrl,
+        branch: 'main', projectsRoot, target: path.join(projectsRoot, `copy-${++counter}`), cacheRoot,
+        cloneType: 'full', reuseLocalRepositories: true, seeds: [], diagnostics: false, studioProExecutable: '', ...overrides };
+      const requestFile = path.join(directory, 'request.json');
+      await writeFile(requestFile, JSON.stringify(request));
+      if (cancel) await writeFile(path.join(directory, 'cancel.request'), 'cancel');
+      const result = await new Promise((resolve, reject) => {
+        const child = spawn(ps, ['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',worker,'-RequestFile',requestFile,...(noLaunch ? ['-NoLaunch'] : []),'-AllowLocalTestRemote'], { windowsHide: true });
+        let output = ''; child.stdout.on('data', x => { output += x; }); child.stderr.on('data', x => { output += x; });
+        const timeout = setTimeout(() => { child.kill(); reject(new Error('Worker timeout: ' + output)); }, 60000);
+        child.on('error', reject); child.on('close', code => { clearTimeout(timeout); resolve({ code, output }); });
+      });
+      const status = JSON.parse(await readFile(path.join(directory, 'status.json'), 'utf8'));
+      return { ...result, request, status, directory };
+    }
+    function success(result) { assert.equal(result.code, 0, result.output); assert.equal(result.status.state, 'completed', result.output); }
+    const cold = await run();
+    success(cold);
+    await t.test('cold full cache yields a clean independent checkout and notes', async () => {
+      success(cold); assert.equal(cold.status.strategy, 'cold-full-cache');
+      assert.equal(await git(cold.request.target, 'status', '--porcelain'), '');
+      assert.equal(await git(cold.request.target, 'config', 'remote.origin.url'), remoteUrl);
+      assert.equal(await git(cold.request.target, 'config', 'notes.rewriteMode'), 'overwrite');
+      assert.equal(await git(cold.request.target, 'config', 'notes.rewrite.rebase'), 'true');
+      assert.equal(await git(cold.request.target, 'config', 'mendix.sprintr-project-id'), appId);
+      assert.equal(await readFile(path.join(cold.request.target, 'readme.txt'), 'utf8'), 'LF content\n');
+      assert.match(await git(cold.request.target, 'notes', '--ref=mx_metadata', 'show'), /fixture notes/);
+      await assert.rejects(access(path.join(cold.request.target, '.git', 'objects', 'info', 'alternates')));
+    });
+    await t.test('default cache folder is hidden', async () => {
+      const { stdout } = await exec(ps, ['-NoProfile', '-NonInteractive', '-Command', '(Get-Item -Force -LiteralPath $env:MX_TEST_PATH).Attributes'],
+        { windowsHide: true, env: { ...process.env, MX_TEST_PATH: path.join(root, '.mendix-switcher-cache') } });
+      assert.match(stdout, /Hidden/);
+    });
+    await t.test('launch: false publishes without starting Studio Pro', async () => {
+      // A missing executable makes any launch attempt fail, so completing proves the launch was skipped.
+      const studioProExecutable = path.join(root, 'missing', 'studiopro.exe');
+      const cloneOnly = await run({ launch: false, studioProExecutable }, false, { noLaunch: false });
+      success(cloneOnly); assert.equal(cloneOnly.status.ready, true);
+      const launched = await run({ studioProExecutable }, false, { noLaunch: false });
+      assert.equal(launched.status.state, 'launch_failed', launched.output);
+    });
+    await t.test('warm cache updates branches, metadata and tags from server', async () => {
+      await git(source, 'branch', 'new-branch'); await git(source, 'tag', 'fixture-v2');
+      await git(source, 'push', remote, 'new-branch', 'fixture-v2');
+      const warm = await run({ branch: 'new-branch' }); success(warm);
+      assert.equal(warm.status.strategy, 'warm-full-cache');
+      assert.equal(await git(warm.request.target, 'symbolic-ref', '--short', 'HEAD'), 'new-branch');
+      assert.match(await git(warm.request.target, 'tag', '--list'), /fixture-v2/);
+    });
+    await t.test('cache removal does not break existing checkouts', async () => {
+      success(await run({ action: 'remove-cache' }));
+      await git(cold.request.target, 'fsck', '--full');
+      await git(cold.request.target, 'fetch', 'origin');
+      await git(cold.request.target, 'merge', '--ff-only', 'origin/main');
+    });
+    await t.test('seeding reads remote tracking refs and preserves dirty source work', async () => {
+      await writeFile(path.join(cold.request.target, 'readme.txt'), 'uncommitted user edit\n');
+      const seeded = await run({ branch: 'feature/café', seeds: [cold.request.target] }); success(seeded);
+      assert.equal(seeded.status.strategy, 'seeded-full-cache');
+      assert.equal(await readFile(path.join(cold.request.target, 'readme.txt'), 'utf8'), 'uncommitted user edit\n');
+      assert.equal(await readFile(path.join(seeded.request.target, 'readme.txt'), 'utf8'), 'LF content\n');
+    });
+    await t.test('partial clone is direct, promisor aware, clean and fetchable', async () => {
+      const partial = await run({ cloneType: 'partial' }); success(partial);
+      assert.equal(partial.status.strategy, 'direct-partial');
+      assert.equal(await git(partial.request.target, 'config', 'remote.origin.promisor'), 'true');
+      assert.equal(await git(partial.request.target, 'status', '--porcelain'), '');
+      await git(partial.request.target, 'fetch', 'origin');
+      await git(partial.request.target, 'merge', '--ff-only', 'origin/main');
+    });
+    await t.test('direct full clone bypasses cache', async () => {
+      const direct = await run({ reuseLocalRepositories: false }); success(direct);
+      assert.equal(direct.status.strategy, 'direct-full');
+      await writeFile(path.join(source, 'new-file.txt'), 'remote update\n');
+      await git(source, 'add', '.'); await git(source, 'commit', '-m', 'advance main');
+      await git(source, 'push', remote, 'main');
+      await git(direct.request.target, 'fetch', 'origin');
+      await git(direct.request.target, 'merge', '--ff-only', 'origin/main');
+      assert.equal(await readFile(path.join(direct.request.target, 'new-file.txt'), 'utf8'), 'remote update\n');
+    });
+    await t.test('unsupported filtering is recorded as full fallback', async () => {
+      await git(remote, 'config', 'uploadpack.allowFilter', 'false');
+      const fallback = await run({ cloneType: 'partial' }); success(fallback);
+      assert.equal(fallback.status.strategy, 'direct-full-filter-unavailable');
+      await assert.rejects(git(fallback.request.target, 'config', '--get', 'remote.origin.promisor'));
+    });
+    await t.test('missing branch, cancellation and occupied target never publish', async () => {
+      const missing = await run({ branch: 'does-not-exist' }); assert.equal(missing.status.state, 'failed');
+      await assert.rejects(access(missing.request.target));
+      const cancelled = await run({}, true); assert.equal(cancelled.status.state, 'cancelled');
+      await assert.rejects(access(cancelled.request.target));
+      const occupied = await run({ target: cold.request.target }); assert.equal(occupied.status.state, 'failed');
+      assert.equal(await readFile(path.join(cold.request.target, 'readme.txt'), 'utf8'), 'uncommitted user edit\n');
+    });
+    await t.test('concurrent requests for one target serialize and never nest checkouts', async () => {
+      const target = path.join(projectsRoot, 'concurrent');
+      const results = await Promise.all([run({ target }), run({ target })]);
+      assert.equal(results.filter(r => r.status.state === 'completed').length, 1, results.map(r => r.output).join('\n'));
+      assert.equal(results.filter(r => r.status.state === 'failed').length, 1);
+      assert.equal(await git(target, 'status', '--porcelain'), '');
+      for (const result of results) await assert.rejects(access(path.join(target, `.mx-checkout-${result.request.operationId}`)));
+    });
+    await t.test('lock files are removed once operations finish', async () => {
+      assert.deepEqual((await readdir(projectsRoot)).filter(name => name.endsWith('.lock')), []);
+      await assert.rejects(access(path.join(cacheRoot, 'cache.lock')));
+    });
+    await t.test('missing Mendix metadata fails before publishing', async () => {
+      await git(remote, 'update-ref', '-d', 'refs/notes/mx_metadata');
+      const failed = await run({ reuseLocalRepositories: false });
+      assert.equal(failed.status.state, 'failed');
+      assert.equal(failed.status.stage, 'fetch-metadata');
+      await assert.rejects(access(failed.request.target));
+    });
+  } finally {
+    // This test owns the mkdtemp directory exclusively; never remove a user checkout.
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});

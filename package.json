@@ -1,0 +1,108 @@
+{
+  "name": "mendix-app-switcher",
+  "title": "Mendix App Switcher",
+  "description": "Browse Mendix Team Server apps and branches, open local checkouts, or start a remote checkout.",
+  "icon": "icon.png",
+  "author": "vlad",
+  "version": "0.1.0",
+  "license": "MIT",
+  "platforms": [
+    "Windows"
+  ],
+  "categories": [
+    "Developer Tools",
+    "Productivity"
+  ],
+  "commands": [
+    {
+      "name": "switch",
+      "title": "Open Mendix Branch",
+      "description": "Pick an app and branch to open, or clone it if it is not local yet",
+      "mode": "view"
+    },
+    {
+      "name": "manage-apps",
+      "title": "Manage Mendix Apps",
+      "description": "Add and remove the Mendix projects shown in the switcher",
+      "mode": "view"
+    },
+    {
+      "name": "versions",
+      "title": "Mendix Studio Pro Versions",
+      "description": "List installed Studio Pro versions and launch one",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "cloneType",
+      "title": "Default Clone Type",
+      "description": "Full history uses a reusable local cache. Partial downloads historical file contents on demand and needs network access for some operations.",
+      "type": "dropdown",
+      "required": false,
+      "default": "full",
+      "data": [{ "title": "Full", "value": "full" }, { "title": "Partial (blob:none)", "value": "partial" }]
+    },
+    {
+      "name": "reuseLocalRepositories",
+      "title": "Reuse Local Repositories",
+      "label": "Use a repository cache for full checkouts",
+      "description": "Seed from a compatible local checkout when possible; existing project files are never modified.",
+      "type": "checkbox",
+      "required": false,
+      "default": true
+    },
+    {
+      "name": "repositoryCacheRoot",
+      "title": "Repository Cache Root (optional)",
+      "description": "Defaults to .mendix-switcher-cache in the app's projects root. Prefer the same volume as checkouts for hard-link reuse.",
+      "type": "directory",
+      "required": false
+    },
+    {
+      "name": "detailedCloneDiagnostics",
+      "title": "Detailed Clone Diagnostics",
+      "label": "Record Git Trace2 performance data",
+      "description": "Off by default. Logs can contain repository paths and branch names; review them before sharing.",
+      "type": "checkbox",
+      "required": false,
+      "default": false
+    },
+    {
+      "name": "personalAccessToken",
+      "title": "Mendix Personal Access Token",
+      "description": "PAT with mx:modelrepository:repo:read. Sent only to repository.api.mendix.com as Authorization: MxToken.",
+      "type": "password",
+      "required": false
+    },
+    {
+      "name": "projectsRoot",
+      "title": "Local Projects Root",
+      "description": "A parent folder containing your local Studio Pro checkouts; example C:\\Mendix.",
+      "type": "directory",
+      "required": false
+    },
+    {
+      "name": "studioProExecutable",
+      "title": "Studio Pro Executable (optional)",
+      "description": "Opens local and freshly cloned MPRs with this studiopro.exe; also used for the assisted download.",
+      "type": "file",
+      "required": false
+    }
+  ],
+  "scripts": {
+    "dev": "ray develop --target release",
+    "build": "ray build -e dist",
+    "lint": "ray lint",
+    "test": "node scripts/compile-core.cjs && node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@raycast/api": "^1.103.0",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "typescript": "^5.8.3"
+  }
+}
