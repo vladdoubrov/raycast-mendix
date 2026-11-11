@@ -41,7 +41,7 @@ test('worker integration: full, warm, seeded, partial, cancellation and safe fai
       await mkdir(directory, { recursive: true });
       const request = { schemaVersion: 1, operationId, appId, appName: 'App', action: 'checkout', remoteUrl,
         branch: 'main', projectsRoot, target: path.join(projectsRoot, `copy-${++counter}`), cacheRoot,
-        cloneType: 'full', reuseLocalRepositories: true, seeds: [], diagnostics: false, studioProExecutable: '', ...overrides };
+        cloneType: 'full', reuseLocalRepositories: true, seeds: [], diagnostics: false, studioProExecutable: '', launch: true, openTerminal: false, ...overrides };
       const requestFile = path.join(directory, 'request.json');
       await writeFile(requestFile, JSON.stringify(request));
       if (cancel) await writeFile(path.join(directory, 'cancel.request'), 'cancel');

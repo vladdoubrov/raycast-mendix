@@ -74,7 +74,7 @@ The old `clone-branch.ps1` and `mx-postclone.sh` remain legacy manual tools in `
 
 Each operation lives under Raycast's support directory at `operations/<random UUID>/` and contains:
 
-- `request.json`: schemaVersion 1, operation/app IDs, action, canonical remote, exact branch, effective root, target, app cache directory, mode, reuse flag, candidate seed paths, diagnostics flag, executable. Never includes the API PAT.
+- `request.json`: schemaVersion 1, operation/app IDs, action, canonical remote, exact branch, effective root, target, app cache directory, mode, reuse flag, candidate seed paths, diagnostics flag, executable, `launch` (false: publish without opening Studio Pro), `openTerminal` (true: open a terminal in the published checkout). Never includes the API PAT.
 - `worker.ps1`: immutable snapshot of the bundled worker at launch, so rebuilds cannot change active operations.
 - `status.json`: schemaVersion, IDs, action, state/stage/strategy, target, timestamps, PID/process start time, ready flag/MPR path, selected commit, stage timings, elapsed time, sanitized error.
 - `ownership.json`: the staging and target paths associated with this operation.

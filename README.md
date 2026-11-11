@@ -6,6 +6,7 @@ Switch between your Mendix apps and Team Server branches from [Raycast for Windo
 - Open a checkout in the right Studio Pro version.
 - Clone a remote branch and open it in one step.
 - List, launch, and (optionally) install Studio Pro versions.
+- Optional: see the Jira issue (summary and status) behind each branch.
 
 > Unofficial, not affiliated with Mendix. Not in the Raycast Store yet; install from source.
 
