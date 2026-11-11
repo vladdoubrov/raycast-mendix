@@ -34,6 +34,8 @@ $script:status = $null
 $script:job = $null
 $script:cacheLock = $null
 $script:targetLock = $null
+$script:ownedStaging = $null
+$script:ownedBuilding = $null
 $script:total = [Diagnostics.Stopwatch]::StartNew()
 $exitCode = 1
 function SafeText([string]$Value) {
@@ -184,6 +186,27 @@ function GetLock([string]$Path) {
         }
     }
 }
+# Removes a temporary folder this operation created. Best effort: a scanner can hold files for a moment,
+# and a leftover folder is reported rather than failing the cleanup.
+function RemoveOwnedFolder([string]$Path, [string]$Parent) {
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return }
+    try {
+        AssertChild $Path $Parent
+        # The \\?\ prefix lets Windows PowerShell 5.1 reach paths longer than 260 characters.
+        $long = '\\?\' + [IO.Path]::GetFullPath($Path)
+        # Never recurse through a junction or symlink; it could point at user data.
+        if (@(Get-ChildItem -LiteralPath $long -Force -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'It contains a reparse point.' }
+        for ($attempt = 1; ; $attempt++) {
+            try { Remove-Item -LiteralPath $long -Force -Recurse -ErrorAction Stop; break }
+            catch { if ($attempt -ge 10) { throw }; Start-Sleep -Milliseconds 500 }
+        }
+        Log "Removed incomplete folder $Path"
+    } catch {
+        $message = "Could not remove incomplete folder $Path; delete it manually. $(SafeText $_.Exception.Message)"
+        Log $message
+        $script:status.error = ($script:status.error + ' ' + $message).Trim()
+    }
+}
 function IsFull([string]$Repo) {
     if ((G @('-C',$Repo,'rev-parse','--is-shallow-repository')) -ne 'false') { return $false }
     if ((Git @('-C',$Repo,'config','--get-regexp','^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$') -MayFail).Code -eq 0) { return $false }
@@ -230,7 +253,9 @@ try {
         if (Test-Path -LiteralPath $req.target) { throw 'Destination already exists. No files were changed.' }
         $script:staging = Join-Path $req.projectsRoot ".mx-checkout-$($req.operationId)"
         AssertChild $staging $req.projectsRoot
-        if (Test-Path -LiteralPath $staging) { throw 'Staging directory already exists; retained files must be inspected before retrying.' }
+        if (Test-Path -LiteralPath $staging) { throw 'Staging directory already exists; it is not removed because this operation did not create it.' }
+        # From here on the staging folder belongs to this operation and is removed if it fails.
+        $script:ownedStaging = $staging
         WriteJson (Join-Path $opDir 'ownership.json') @{ staging=$staging; target=$req.target; operationId=$req.operationId }
     }
     $useCache = ($req.cloneType -eq 'full' -and $req.reuseLocalRepositories) -or $req.action -ne 'checkout'
@@ -268,6 +293,8 @@ try {
                     if (Test-Path -LiteralPath $manifestPath) { throw 'Cache manifest exists without its repository; inspect the cache before retrying.' }
                     $building = Join-Path $req.cacheRoot ".building-$($req.operationId)"
                     AssertChild $building $req.cacheRoot
+                    if (Test-Path -LiteralPath $building) { throw 'Cache build directory already exists; it is not removed because this operation did not create it.' }
+                    $script:ownedBuilding = $building
                     $seed = $null
                     foreach ($candidate in $req.seeds) {
                         try {
@@ -308,6 +335,7 @@ try {
                     if (-not (IsFull $building)) { throw 'New cache unexpectedly depends on missing objects.' }
                     [void](G @('-C',$building,'rev-parse','--verify','refs/notes/mx_metadata'))
                     [IO.Directory]::Move($building, $cacheRepo)
+                    $script:ownedBuilding = $null
                     SaveManifest
                 }
             }
@@ -352,7 +380,7 @@ try {
             if ((G @('-C',$staging,'rev-parse','--abbrev-ref','@{upstream}')) -cne "origin/$($req.branch)") { throw 'Upstream validation failed.' }
             [void](G @('-C',$staging,'rev-parse','--verify','refs/notes/mx_metadata'))
             if ($status.strategy -notmatch '^direct-partial$' -and -not (IsFull $staging)) { throw 'Full checkout is shallow or depends on another repository.' }
-            if (G @('-C',$staging,'status','--porcelain','--untracked-files=normal')) { throw 'Checkout is not clean; retained for inspection.' }
+            if (G @('-C',$staging,'status','--porcelain','--untracked-files=normal')) { throw 'Checkout is not clean.' }
             $mprs = @(Get-ChildItem -LiteralPath $staging -Filter '*.mpr' -File)
             foreach ($dir in Get-ChildItem -LiteralPath $staging -Directory | Where-Object { $_.Name -ne '.git' }) { $mprs += @(Get-ChildItem -LiteralPath $dir.FullName -Filter '*.mpr' -File) }
             if ($mprs.Count -ne 1) { throw "Expected one MPR at root or one folder below, found $($mprs.Count)." }
@@ -360,8 +388,9 @@ try {
         }
         Stage 'publish-checkout' {
             AssertChild $req.target $req.projectsRoot
-            if (Test-Path -LiteralPath $req.target) { throw 'Destination was created by another process; staging retained.' }
+            if (Test-Path -LiteralPath $req.target) { throw 'Destination was created by another process.' }
             [IO.Directory]::Move($staging, $req.target)
+            $script:ownedStaging = $null
             $status.ready = $true
             $status.mprPath = Join-Path $req.target $mprRelative
         }
@@ -382,10 +411,15 @@ try {
         $status.error = $message
         $status.state = if ($message.StartsWith('CANCELLED:')) { 'cancelled' } elseif ($status.ready) { 'launch_failed' } else { 'failed' }
         Log $message
-        Log 'Existing project folders were preserved. Incomplete staging files and operation logs are retained for inspection.'
+        Log "Existing project folders were preserved. Operation logs are kept in $($script:opDir)."
     } else { Write-Error $message -ErrorAction Continue }
 } finally {
+    # Closing the job kills any Git process that still has files open in the temporary folders.
     if ($script:job) { $job.Dispose() }
+    if ($exitCode -ne 0 -and $script:status) {
+        RemoveOwnedFolder $script:ownedStaging $req.projectsRoot
+        RemoveOwnedFolder $script:ownedBuilding $req.cacheRoot
+    }
     if ($script:cacheLock) { $cacheLock.Dispose() }
     if ($script:targetLock) { $targetLock.Dispose() }
     if ($script:status) { SaveStatus }

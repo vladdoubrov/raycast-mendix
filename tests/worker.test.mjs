@@ -146,12 +146,24 @@ test('worker integration: full, warm, seeded, partial, cancellation and safe fai
       assert.deepEqual((await readdir(projectsRoot)).filter(name => name.endsWith('.lock')), []);
       await assert.rejects(access(path.join(cacheRoot, 'cache.lock')));
     });
-    await t.test('missing Mendix metadata fails before publishing', async () => {
+    await t.test('missing Mendix metadata fails before publishing and removes staging', async () => {
       await git(remote, 'update-ref', '-d', 'refs/notes/mx_metadata');
       const failed = await run({ reuseLocalRepositories: false });
       assert.equal(failed.status.state, 'failed');
       assert.equal(failed.status.stage, 'fetch-metadata');
       await assert.rejects(access(failed.request.target));
+      // The clone created staging before the metadata fetch failed.
+      assert.match(failed.output, /Removed incomplete folder/);
+      await assert.rejects(access(path.join(projectsRoot, `.mx-checkout-${failed.request.operationId}`)));
+    });
+    await t.test('failed cold cache build removes its build folder', async () => {
+      success(await run({ action: 'remove-cache' }));
+      const failed = await run();
+      assert.equal(failed.status.state, 'failed');
+      assert.equal(failed.status.stage, 'prepare-cache');
+      assert.match(failed.output, /Removed incomplete folder/);
+      assert.deepEqual((await readdir(cacheRoot)).filter(name => name.startsWith('.building-') || name === 'full.git'), []);
+      await assert.rejects(access(path.join(projectsRoot, `.mx-checkout-${failed.request.operationId}`)));
     });
   } finally {
     // This test owns the mkdtemp directory exclusively; never remove a user checkout.

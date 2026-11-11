@@ -55,7 +55,7 @@ Success means a new independent repository has passed validation, moved to its f
 
 Existing destinations are never overwritten. A free legacy `App-branch` name is preferred; a collision uses a deterministic ten-character SHA-256 suffix derived from app UUID and raw branch name. If that also exists, fail. Windows reserved names, invalid characters, and trailing dots/spaces are sanitized. Raw Git branch names are never sanitized for Git operations.
 
-Failure or cancellation retains logs and incomplete staging for diagnosis. No incomplete folder appears in normal local discovery, because staging names begin with a dot. A retry starts a fresh operation. No automatic deletion of abandoned staging, log retention, or resume-in-place is implemented. Manual cleanup must use the operation ownership record and verify the resolved path. Never infer ownership from a friendly folder name alone.
+Failure or cancellation retains the operation logs. The worker removes the staging folder and any `.building-*` cache folder it created in this operation, after its Git processes are killed and before it releases its locks. It removes only folders whose paths it checked were free before it created them, rejects removal when they contain a reparse point, and retries briefly for scanners that hold files. If removal still fails, the leftover path is logged and appended to the status error. A worker that is killed (for example, its window is closed) cannot clean up and leaves its staging folder. No incomplete folder appears in normal local discovery, because staging names begin with a dot. A retry starts a fresh operation. No log retention or resume-in-place is implemented. Manual cleanup must use the operation ownership record and verify the resolved path. Never infer ownership from a friendly folder name alone.
 
 ## 4. Module responsibilities and contracts
 
@@ -136,7 +136,7 @@ Publish with `Directory.Move`, which fails if the destination appears concurrent
 
 Git children are assigned to a Windows kill-on-close job; closing the worker or disposing the job terminates owned Git processes. The worker checks `cancel.request` during Git output processing and while waiting for locks. It releases locks in `finally`. Requests arriving between launch and a very short Git process exit are handled without treating an already-exited child as a supervision failure.
 
-The implementation preserves incomplete data for inspection rather than recursively deleting it after errors. Confirmed cache removal validates ownership, rejects nested reparse points, and deletes only that app's `full.git` and manifest under lock. An invalid/corrupt manifest or structurally invalid cache blocks automatic removal; document/manual inspection is required. No checkout folder is an automatic deletion target.
+After an error, the implementation recursively deletes only the staging and cache build folders that the failed operation created (section 3.2). Confirmed cache removal validates ownership, rejects nested reparse points, and deletes only that app's `full.git` and manifest under lock. An invalid/corrupt manifest or structurally invalid cache blocks automatic removal; document/manual inspection is required. No checkout folder is an automatic deletion target.
 
 Trace2 is opt-in because logs can reveal local paths, branch names, and remote details. Ordinary logs redact HTTP URL userinfo and authorization fields, but cannot guarantee that arbitrary credential helpers never print secrets. Review logs before sharing. No telemetry or remote writes are implemented.
 

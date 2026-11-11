@@ -10,7 +10,7 @@ A Windows-only Raycast extension (local source, not published to the Store) for 
 
 ```powershell
 npm run dev            # ray develop --target release
-npm run build          # ray build -e dist; also updates the installed extension
+npm run build          # ray build -e dist; type-checks and compiles only, does NOT update the installed extension
 npm run lint           # ray lint; skips formatting checks because ESLint and Prettier are not installed
 npx tsc --noEmit       # type check
 
@@ -24,7 +24,7 @@ node --test --test-name-pattern="validates Mendix" tests/core.test.mjs
 
 Set `MX_TEST_POWERSHELL` to a `pwsh.exe` path to run `tests/worker.test.mjs` under PowerShell 7. It defaults to `powershell.exe` (5.1), and the worker must work on both.
 
-Raycast runs the installed copy at `%USERPROFILE%\.config\raycast\extensions\mendix-app-switcher`, not this directory. Edits take effect only after `npm run build` or `npm run dev`, so check the installed assets before declaring a change deployed.
+Raycast runs the installed copy at `%USERPROFILE%\.config\raycast\extensions\mendix-app-switcher`, not this directory. Edits take effect only after `npm run dev` (a watcher; it copies within seconds and the copy stays after you stop it), so check the installed assets before declaring a change deployed.
 
 ## Architecture
 
@@ -56,7 +56,7 @@ Raycast's process has an incomplete environment: `PATH`, `PATHEXT`, and `USERPRO
 
 - **Canonical remote:** keep the exact form `https://git.api.mendix.com/<lowercase uuid>.git/`, including the trailing slash. Studio Pro's credential lookup uses `Uri.IsBaseOf`, so omitting the slash can match another app.
 - **Secrets:** the PAT is only for the repository read API (`Authorization: MxToken`). It must never reach the worker request, a Git URL, or arguments. Git authentication belongs to the credential helper.
-- **User data:** never overwrite an existing target, and never automatically delete checkouts or failed staging folders. Failures keep `.mx-checkout-*` and `.building-*` for inspection. `deleteLocalCheckout` only recycles folders inside the projects root, after a confirmation.
+- **User data:** never overwrite an existing target, and never automatically delete checkouts. On failure the worker removes only the `.mx-checkout-*` and `.building-*` folders that the same operation created; operation logs are kept. `deleteLocalCheckout` only recycles folders inside the projects root, after a confirmation.
 - **Remote and clone shape:** implement no remote-mutating Git commands. Do not use `--single-branch`, shallow clones, alternates, or linked worktrees for checkouts.
 - **Git configuration:** do not install Studio Pro/mxunit merge drivers. Set `core.autocrlf=false` before the first materialization rather than repairing line endings afterward.
 - **Tests:** they use disposable local `file:///` Git servers and dummy MPR files, never real Mendix projects. `file:///` remotes are allowed only through the worker's `-AllowLocalTestRemote` switch, which production launches never set.

@@ -57,7 +57,7 @@ More in the action menu (`Ctrl+K`): clone without opening, partial clone, delete
 
 - **Clones run in a PowerShell window**, so they continue if Raycast closes. Each app gets a cache (`.mendix-switcher-cache` in your projects root), which makes later clones of the same app fast.
 - **Clones are set up like Studio Pro's own downloads** (line endings, Mendix metadata, all branches). Mendix still officially supports only downloads made by Studio Pro; **Download via Studio Pro (Assisted)** in the action menu is the official route.
-- **Nothing is overwritten.** A failed clone leaves a hidden `.mx-checkout-*` folder for inspection.
+- **Nothing is overwritten.** A failed clone removes its own temporary folder and keeps its logs.
 - **Your token** is only sent to Mendix's repository API to list branches. Git uses its own stored credentials. No telemetry.
 
 ## Troubleshooting
