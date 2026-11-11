@@ -1,5 +1,6 @@
 import { Cache, LocalStorage } from "@raycast/api";
 import { LocalCheckout, MendixApp, RemoteBranch, validateAppId } from "./core";
+import { JiraIssue } from "./jira";
 import { StudioProInstall } from "./studiopro";
 const KEY = "mendix-apps-v1";
 export async function getApps(): Promise<MendixApp[]> {
@@ -36,6 +37,16 @@ export const setCachedRemote = (appId: string, items: RemoteBranch[]) =>
 export const getCachedLocal = (appId: string, root: string) => readCached<LocalCheckout>(localKey(appId, root));
 export const setCachedLocal = (appId: string, root: string, items: LocalCheckout[]) =>
   branchCache.set(localKey(appId, root), JSON.stringify({ updatedAt: Date.now(), items }));
+// Jira issues by site, shared by all apps; merged so one app's refresh keeps another app's issues.
+const jiraKey = (siteUrl: string) => `jira-issues:${siteUrl.toLowerCase()}`;
+export const getCachedJiraIssues = (siteUrl: string) => readCached<JiraIssue>(jiraKey(siteUrl))?.items ?? [];
+/** Replaces the entries for `requested` keys: fetched ones are updated, missing ones dropped. */
+export function mergeCachedJiraIssues(siteUrl: string, requested: string[], fetched: JiraIssue[]): JiraIssue[] {
+  const asked = new Set(requested);
+  const items = [...getCachedJiraIssues(siteUrl).filter((i) => !asked.has(i.key)), ...fetched];
+  branchCache.set(jiraKey(siteUrl), JSON.stringify({ updatedAt: Date.now(), items }));
+  return items;
+}
 // Installed Studio Pro versions rarely change; the registry scan refreshes this in the background.
 const installsKey = "studiopro-installs";
 export const getCachedInstalls = () => readCached<StudioProInstall>(installsKey);

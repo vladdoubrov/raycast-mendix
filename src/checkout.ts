@@ -30,6 +30,8 @@ export interface CheckoutRequest {
   studioProExecutable: string;
   /** False publishes the checkout without opening Studio Pro. */
   launch: boolean;
+  /** True opens a terminal in the published checkout folder. */
+  openTerminal: boolean;
 }
 export interface OperationStatus {
   schemaVersion: 1;

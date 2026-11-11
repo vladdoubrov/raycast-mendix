@@ -88,6 +88,36 @@
       "description": "Opens local and freshly cloned MPRs with this studiopro.exe; also used for the assisted download.",
       "type": "file",
       "required": false
+    },
+    {
+      "name": "jiraSiteUrl",
+      "title": "Jira Site (optional)",
+      "description": "Your Jira Cloud site, e.g. yourcompany.atlassian.net. With email and API token set, branches named after an issue show its summary and status.",
+      "type": "textfield",
+      "required": false,
+      "placeholder": "yourcompany.atlassian.net"
+    },
+    {
+      "name": "jiraEmail",
+      "title": "Jira Email (optional)",
+      "description": "The Atlassian account email that the API token belongs to.",
+      "type": "textfield",
+      "required": false
+    },
+    {
+      "name": "jiraApiToken",
+      "title": "Jira API Token (optional)",
+      "description": "A classic API token from id.atlassian.com → Security → API tokens. Sent only to the Jira site above.",
+      "type": "password",
+      "required": false
+    },
+    {
+      "name": "jiraProjectKeys",
+      "title": "Jira Project Keys (optional)",
+      "description": "Comma-separated, e.g. OOMO. Limits issue detection to these projects and also matches lower-case branch names. Empty: any upper-case KEY-123.",
+      "type": "textfield",
+      "required": false,
+      "placeholder": "OOMO"
     }
   ],
   "scripts": {

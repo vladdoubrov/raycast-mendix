@@ -1,6 +1,7 @@
 import { Alert, Clipboard, Color, Icon, Image, Toast, confirmAlert, environment, getPreferenceValues, open, showToast } from "@raycast/api";
 import { execFile, spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
+import { homedir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import { LocalCheckout, MendixApp, findLocalCheckouts, summarizeGitStatus } from "./core";
@@ -10,6 +11,10 @@ export type Config = CheckoutPreferences & {
   personalAccessToken?: string;
   projectsRoot?: string;
   studioProExecutable?: string;
+  jiraSiteUrl?: string;
+  jiraEmail?: string;
+  jiraApiToken?: string;
+  jiraProjectKeys?: string;
 };
 export const getConfig = () => getPreferenceValues<Config>();
 function launchEnvironment(): NodeJS.ProcessEnv {
@@ -79,7 +84,7 @@ export async function assistedCheckout(app: MendixApp, branch: string): Promise<
 // finds nothing; missing system and user variables are restored from the registry, profile folders from the OS.
 // Windows PowerShell started without PATHEXT sets it to just ".CPL", so it is restored whenever .EXE is missing.
 // [char]34 is a double quote, so the -File path survives spaces without quoting this argument.
-const OPEN_WINDOW = [
+const RESTORE_ENVIRONMENT = [
   "foreach ($scope in 'Machine','User') { $vars = [Environment]::GetEnvironmentVariables($scope); foreach ($name in $vars.Keys) { if (-not [Environment]::GetEnvironmentVariable($name, 'Process')) { [Environment]::SetEnvironmentVariable($name, $vars[$name], 'Process') } } }",
   "foreach ($folder in @{ USERPROFILE = 'UserProfile'; APPDATA = 'ApplicationData'; LOCALAPPDATA = 'LocalApplicationData' }.GetEnumerator()) { if (-not [Environment]::GetEnvironmentVariable($folder.Key, 'Process')) { [Environment]::SetEnvironmentVariable($folder.Key, [Environment]::GetFolderPath($folder.Value), 'Process') } }",
   "if (($env:PATHEXT -split ';') -notcontains '.EXE') { $env:PATHEXT = [Environment]::GetEnvironmentVariable('PATHEXT','Machine') }",
@@ -87,14 +92,48 @@ const OPEN_WINDOW = [
   "$ps = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Microsoft\\WindowsApps\\Microsoft.PowerShell_8wekyb3d8bbwe\\pwsh.exe'",
   "if (-not (Test-Path -LiteralPath $ps)) { $ps = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source }",
   "if (-not $ps) { $ps = 'powershell.exe' }",
+];
+const OPEN_WINDOW = [
+  ...RESTORE_ENVIRONMENT,
   "Start-Process -FilePath $ps -WorkingDirectory $env:USERPROFILE -ArgumentList '-NoProfile','-NoExit','-ExecutionPolicy','Bypass','-File',('{0}{1}{0}' -f [char]34, $env:MX_WINDOW_SCRIPT)",
 ].join("; ");
+// Fallback when Windows Terminal is missing: the same PowerShell as above, with the user's profile.
+const OPEN_TERMINAL = [...RESTORE_ENVIRONMENT, "Start-Process -FilePath $ps -WorkingDirectory $env:MX_TERMINAL_PATH"].join("; ");
 
 /** Runs `script` in its own visible PowerShell window; resolves once the window has started. The window inherits `env`. */
 function openPowerShellWindow(script: string, env: Record<string, string>): Promise<void> {
+  return runLauncher(OPEN_WINDOW, { ...env, MX_WINDOW_SCRIPT: script });
+}
+
+/**
+ * Opens a terminal in `folder`. Windows Terminal (its app alias) is spawned directly: starting Windows PowerShell
+ * first costs about two seconds, and Windows Terminal reloads the environment for new tabs, so Raycast's incomplete
+ * one does not reach the shell. `;` separates wt commands, so it is escaped. checkout-worker.ps1 makes the same choice.
+ */
+export async function openTerminal(folder: string): Promise<void> {
+  try {
+    if (!await exists(folder)) throw new Error(`Folder not found: ${folder}`);
+    // lstat: the alias is a reparse point that stat cannot follow.
+    const wt = join(process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"), "Microsoft", "WindowsApps", "wt.exe");
+    if (await fs.lstat(wt).then(() => true, () => false)) {
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(wt, ["-d", folder.replace(/;/g, "\\;")], { detached: true, stdio: "ignore", env: launchEnvironment() });
+        child.once("error", reject);
+        child.once("spawn", () => { child.unref(); resolve(); });
+      });
+      return;
+    }
+    await runLauncher(OPEN_TERMINAL, { MX_TERMINAL_PATH: folder });
+  } catch (error) {
+    await showToast({ style: Toast.Style.Failure, title: "Could not open terminal", message: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+/** Runs a hidden Windows PowerShell `command` that starts a visible window; resolves once it has. */
+function runLauncher(command: string, env: Record<string, string>): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", OPEN_WINDOW], {
-      stdio: ["ignore", "ignore", "pipe"], windowsHide: true, env: { ...launchEnvironment(), ...env, MX_WINDOW_SCRIPT: script },
+    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], {
+      stdio: ["ignore", "ignore", "pipe"], windowsHide: true, env: { ...launchEnvironment(), ...env },
     });
     let stderr = "";
     child.stderr.setEncoding("utf8");
@@ -111,7 +150,12 @@ export async function cloneAndOpen(app: MendixApp, branch: string, cloneType?: C
 
 /** Clones with the default clone type and leaves Studio Pro closed; Checkout Operations can open it later. */
 export async function cloneOnly(app: MendixApp, branch: string): Promise<void> {
-  await startOperation(app, branch, "checkout", undefined, undefined, false);
+  await startOperation(app, branch, "checkout", undefined, undefined, "none");
+}
+
+/** Clones with the default clone type, then opens a terminal in the new folder instead of Studio Pro. */
+export async function cloneAndOpenTerminal(app: MendixApp, branch: string): Promise<void> {
+  await startOperation(app, branch, "checkout", undefined, undefined, "terminal");
 }
 
 const exists = (path: string) => fs.stat(path).then(() => true, () => false);
@@ -239,7 +283,9 @@ export async function cacheOperation(app: MendixApp, action: "refresh-cache" | "
   await startOperation(app, "", action, "full");
 }
 
-async function startOperation(app: MendixApp, branch: string, action: OperationAction, mode?: CloneType, executable?: string, launch = true): Promise<void> {
+/** `then` is what a finished checkout opens: Studio Pro, a terminal in the folder, or nothing. */
+async function startOperation(app: MendixApp, branch: string, action: OperationAction, mode?: CloneType, executable?: string,
+  then: "studio-pro" | "terminal" | "none" = "studio-pro"): Promise<void> {
   const cfg = getConfig();
   try {
     const parent = projectRoot(app, cfg);
@@ -259,7 +305,8 @@ async function startOperation(app: MendixApp, branch: string, action: OperationA
       remoteUrl: canonicalRemote(app.id), branch, projectsRoot: parent, target,
       cacheRoot: cacheDirectory(app, cfg), cloneType, reuseLocalRepositories: reuse,
       seeds: [...new Set(seeds)], diagnostics: cfg.detailedCloneDiagnostics === true,
-      studioProExecutable: executable ?? cfg.studioProExecutable?.trim() ?? "", launch,
+      studioProExecutable: executable ?? cfg.studioProExecutable?.trim() ?? "",
+      launch: then === "studio-pro", openTerminal: then === "terminal",
     };
     const requestFile = join(directory, "request.json");
     await fs.writeFile(requestFile, JSON.stringify(request, null, 2));

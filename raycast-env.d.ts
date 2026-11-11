@@ -21,7 +21,15 @@ type ExtensionPreferences = {
   /** Local Projects Root - A parent folder containing your local Studio Pro checkouts; example C:\Mendix. */
   "projectsRoot"?: string,
   /** Studio Pro Executable (optional) - Opens local and freshly cloned MPRs with this studiopro.exe; also used for the assisted download. */
-  "studioProExecutable"?: string
+  "studioProExecutable"?: string,
+  /** Jira Site (optional) - Your Jira Cloud site, e.g. yourcompany.atlassian.net. With email and API token set, branches named after an issue show its summary and status. */
+  "jiraSiteUrl"?: string,
+  /** Jira Email (optional) - The Atlassian account email that the API token belongs to. */
+  "jiraEmail"?: string,
+  /** Jira API Token (optional) - A classic API token from id.atlassian.com → Security → API tokens. Sent only to the Jira site above. */
+  "jiraApiToken"?: string,
+  /** Jira Project Keys (optional) - Comma-separated, e.g. OOMO. Limits issue detection to these projects and also matches lower-case branch names. Empty: any upper-case KEY-123. */
+  "jiraProjectKeys"?: string
 }
 
 /** Preferences accessible in all the extension's commands */

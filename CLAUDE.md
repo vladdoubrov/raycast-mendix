@@ -32,7 +32,7 @@ The three commands in `package.json` (`switch`, `manage-apps`, `versions`) are t
 
 ### Testable modules vs. Raycast modules
 
-`src/core.ts`, `src/checkout.ts`, and `src/studiopro.ts` must not import `@raycast/api`. `scripts/compile-core.cjs` transpiles exactly these three to `dist-test/*.cjs` for the Node test runner, and rewrites only the `./core` import. A new test-covered module, or a new import between them, needs that script updated.
+`src/core.ts`, `src/checkout.ts`, `src/studiopro.ts`, and `src/jira.ts` must not import `@raycast/api`. `scripts/compile-core.cjs` transpiles exactly these four to `dist-test/*.cjs` for the Node test runner, and rewrites only the `./core` import. A new test-covered module, or a new import between them, needs that script updated.
 
 `src/launch.ts` holds the side effects that need Raycast: preferences, spawning processes, and starting operations. `src/storage.ts` wraps LocalStorage (registered apps) and Cache (branch and version lists, shown immediately and refreshed in the background).
 
@@ -55,7 +55,7 @@ Raycast's process has an incomplete environment: `PATH`, `PATHEXT`, and `USERPRO
 ## Invariants
 
 - **Canonical remote:** keep the exact form `https://git.api.mendix.com/<lowercase uuid>.git/`, including the trailing slash. Studio Pro's credential lookup uses `Uri.IsBaseOf`, so omitting the slash can match another app.
-- **Secrets:** the PAT is only for the repository read API (`Authorization: MxToken`). It must never reach the worker request, a Git URL, or arguments. Git authentication belongs to the credential helper.
+- **Secrets:** the PAT is only for the repository read API (`Authorization: MxToken`). It must never reach the worker request, a Git URL, or arguments. Git authentication belongs to the credential helper. The optional Jira API token (`src/jira.ts`) goes only to the configured HTTPS Jira site as Basic auth; Jira features must stay hidden when site, email, or token is empty.
 - **User data:** never overwrite an existing target, and never automatically delete checkouts. On failure the worker removes only the `.mx-checkout-*` and `.building-*` folders that the same operation created; operation logs are kept. `deleteLocalCheckout` only recycles folders inside the projects root, after a confirmation.
 - **Remote and clone shape:** implement no remote-mutating Git commands. Do not use `--single-branch`, shallow clones, alternates, or linked worktrees for checkouts.
 - **Git configuration:** do not install Studio Pro/mxunit merge drivers. Set `core.autocrlf=false` before the first materialization rather than repairing line endings afterward.

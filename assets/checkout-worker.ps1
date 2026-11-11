@@ -400,6 +400,12 @@ try {
                 if ($req.studioProExecutable) { Start-Process -FilePath $req.studioProExecutable -ArgumentList (QuoteArg $status.mprPath) }
                 else { Invoke-Item -LiteralPath $status.mprPath }
             }
+            # Same choice as openTerminal in launch.ts: Windows Terminal (`;` separates its commands), else this PowerShell with the user's profile.
+            if (-not $NoLaunch -and $req.openTerminal -eq $true) {
+                $wt = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Microsoft\WindowsApps\wt.exe'
+                if (Test-Path -LiteralPath $wt) { Start-Process -FilePath $wt -ArgumentList '-d',(QuoteArg ($req.target -replace ';','\;')) }
+                else { Start-Process -FilePath (Get-Process -Id $PID).Path -WorkingDirectory $req.target }
+            }
         }
     }
     $status.state = 'completed'

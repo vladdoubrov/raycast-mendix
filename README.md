@@ -37,6 +37,7 @@ The extension now shows up in Raycast and stays there after you stop `npm run de
    - **Studio Pro Executable** (optional): a fixed `studiopro.exe`. Without it, projects open with the Windows `.mpr` association.
 3. **Add your apps.** Run **Manage Mendix Apps** → **Add App** with a name and the Project ID (Portal → app → Settings → General).
 4. **Clone once to sign in.** On your first clone, Git asks for credentials: user name `pat`, password your token. Windows remembers them.
+5. **Optional: connect Jira Cloud.** Fill in **Jira Site** (e.g. `yourcompany.atlassian.net`), **Jira Email**, and **Jira API Token** (a classic token from id.atlassian.com → Security → API tokens). Branches named after an issue (`OOMO-2482`, `feature/OOMO-2482-fix`) then show the issue summary and status, and you can filter the list to issues that are or are not Done. **Jira Project Keys** (e.g. `OOMO`) limits detection to those projects and also matches lower-case branch names. Leave the Jira fields empty to hide all of this.
 
 ## Usage
 
@@ -46,7 +47,9 @@ The extension now shows up in Raycast and stays there after you stop `npm run de
 |---|---|---|
 | `Enter` | Open in Studio Pro | Clone and open |
 | `Ctrl+Shift+O` | Open with a chosen version | Clone and open with a chosen version |
+| `Ctrl+T` | Open the folder in a terminal | Clone, then open the folder in a terminal |
 | `Ctrl+G` | Show uncommitted and unpushed changes | |
+| `Ctrl+J` | Open the branch's Jira issue (if Jira is set up) | Same |
 | `Ctrl+R` | Refresh | Refresh |
 
 More in the action menu (`Ctrl+K`): clone without opening, partial clone, delete a local copy (to the Recycle Bin), and **View Checkout Operations** for clone progress and logs.
@@ -58,7 +61,7 @@ More in the action menu (`Ctrl+K`): clone without opening, partial clone, delete
 - **Clones run in a PowerShell window**, so they continue if Raycast closes. Each app gets a cache (`.mendix-switcher-cache` in your projects root), which makes later clones of the same app fast.
 - **Clones are set up like Studio Pro's own downloads** (line endings, Mendix metadata, all branches). Mendix still officially supports only downloads made by Studio Pro; **Download via Studio Pro (Assisted)** in the action menu is the official route.
 - **Nothing is overwritten.** A failed clone removes its own temporary folder and keeps its logs.
-- **Your token** is only sent to Mendix's repository API to list branches. Git uses its own stored credentials. No telemetry.
+- **Your token** is only sent to Mendix's repository API to list branches. Git uses its own stored credentials. The optional Jira token is only sent to your Jira site. No telemetry.
 
 ## Troubleshooting
 
@@ -69,6 +72,7 @@ More in the action menu (`Ctrl+K`): clone without opening, partial clone, delete
 | Local checkouts missing | Check the Local Projects Root. Projects need a `git.api.mendix.com` origin, or give the app a Dedicated Local Root in Manage Apps. |
 | Clone fails to authenticate | Remove `git:https://git.api.mendix.com` from Windows Credential Manager and clone again. |
 | Clone window shows an execution-policy error | Your organization blocks PowerShell scripts by Group Policy; ask IT. |
+| Jira error 401 / 404 | Check the email and API token (401), or the site URL (404). Only Jira Cloud is supported. |
 | Can't delete a local copy | Close the project in Studio Pro and any terminal open in that folder. |
 
 ## Development
