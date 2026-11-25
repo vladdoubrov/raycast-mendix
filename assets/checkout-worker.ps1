@@ -218,6 +218,13 @@ function IsFull([string]$Repo) {
 }
 function RefreshCache([string]$Repo) {
     [void](G @('-C',$Repo,'fetch','--atomic','--prune','--progress','origin','+refs/heads/*:refs/heads/*','+refs/notes/mx_metadata:refs/notes/mx_metadata'))
+    # Checkouts cloned from the cache take origin/HEAD from the cache's HEAD, and Studio Pro shows that branch as
+    # "Main line". A seeded cache inherits HEAD from the seed's checked-out branch, so follow the server's default.
+    $head = (Git @('-C',$Repo,'ls-remote','--symref','origin','HEAD') -MayFail).Text
+    if ($head -match '(?m)^ref: (refs/heads/\S+)\s+HEAD') {
+        $ref = $Matches[1]
+        if ((Git @('-C',$Repo,'rev-parse','--verify','--quiet',"$ref^{commit}") -MayFail).Code -eq 0) { [void](G @('-C',$Repo,'symbolic-ref','HEAD',$ref)) }
+    } else { Log 'Server did not report its default branch; cache HEAD left unchanged.' }
 }
 function SaveManifest {
     WriteJson $script:manifestPath @{ schemaVersion=1; appId=$script:req.appId; remoteUrl=$script:req.remoteUrl; cloneType='full'; lastSuccessfulRefresh=[DateTime]::UtcNow.ToString('o') }

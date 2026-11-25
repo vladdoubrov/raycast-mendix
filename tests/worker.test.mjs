@@ -61,6 +61,7 @@ test('worker integration: full, warm, seeded, partial, branch creation, cancella
       success(cold); assert.equal(cold.status.strategy, 'cold-full-cache');
       assert.equal(await git(cold.request.target, 'status', '--porcelain'), '');
       assert.equal(await git(cold.request.target, 'config', 'remote.origin.url'), remoteUrl);
+      assert.equal(await git(cold.request.target, 'symbolic-ref', 'refs/remotes/origin/HEAD'), 'refs/remotes/origin/main');
       assert.equal(await git(cold.request.target, 'config', 'notes.rewriteMode'), 'overwrite');
       assert.equal(await git(cold.request.target, 'config', 'notes.rewrite.rebase'), 'true');
       assert.equal(await git(cold.request.target, 'config', 'mendix.sprintr-project-id'), appId);
@@ -96,9 +97,12 @@ test('worker integration: full, warm, seeded, partial, branch creation, cancella
       await git(cold.request.target, 'merge', '--ff-only', 'origin/main');
     });
     await t.test('seeding reads remote tracking refs and preserves dirty source work', async () => {
+      // A seed on a non-default branch must not become the main line (origin/HEAD) of later checkouts.
+      await git(cold.request.target, 'checkout', 'feature/café');
       await writeFile(path.join(cold.request.target, 'readme.txt'), 'uncommitted user edit\n');
       const seeded = await run({ branch: 'feature/café', seeds: [cold.request.target] }); success(seeded);
       assert.equal(seeded.status.strategy, 'seeded-full-cache');
+      assert.equal(await git(seeded.request.target, 'symbolic-ref', 'refs/remotes/origin/HEAD'), 'refs/remotes/origin/main');
       assert.equal(await readFile(path.join(cold.request.target, 'readme.txt'), 'utf8'), 'uncommitted user edit\n');
       assert.equal(await readFile(path.join(seeded.request.target, 'readme.txt'), 'utf8'), 'LF content\n');
     });
