@@ -47,6 +47,8 @@ Enter on a local branch opens its existing MPR. Enter on a remote-only branch st
 | Detailed Clone Diagnostics | Disabled | Enable Git Trace2 performance logging; ordinary status and stage timing remain enabled |
 | Studio Pro Executable | Existing preference | Use configured executable or Windows MPR association |
 
+**Create Branch…**, from an app or branch, takes a new branch name and a follow-up: download and open in Studio Pro (default), download and open a terminal, download only, or create on the server only. It starts a `create-branch` operation (section 5.5).
+
 **View Checkout Operations**, accessible from an app or branch, shows the latest 20 operations with state, stage, strategy, time, and errors. It refreshes every two seconds and supports opening the operation folder, copying status, requesting cancellation, opening a ready checkout, refreshing cache, and confirmed cache removal. Starting a terminal is reported as operation startup, never checkout success.
 
 ### 3.2 Outcomes and recovery
@@ -132,13 +134,25 @@ Materialize the selected branch and set its upstream to `origin/<branch>`. No de
 
 Publish with `Directory.Move`, which fails if the destination appears concurrently. A generic move into an existing directory is prohibited because it could nest the staging folder into a user's project. Record ready/MPR path before requesting launch. Clear inherited `LC_ALL` for configured executable launches. Version selection remains the configured executable or Windows association; no model auto-upgrade logic is added.
 
+### 5.5 Create a branch
+
+A `create-branch` request names the new branch in `branch`, its base in `baseBranch` (the extension always sends `main`), and whether to check it out in `download`. Both names pass `check-ref-format --branch` in preflight; the new name must differ from the base. With `download`, the operation is a checkout of the new branch and takes the target lock and staging folder as in section 5.1; without it, `target` is empty and no project folder is touched.
+
+The base commit comes from wherever the operation already gets its objects, so the push sends no objects:
+
+- **Cache** (full clone with reuse): prepare the cache (section 5.2), take the base commit from the refreshed cache, push from the cache, then fetch the new ref back into it. A download then materializes the new branch from the cache as a normal checkout.
+- **Direct download** (partial, or reuse disabled): clone the base branch into staging (section 5.3), push from staging, fetch the new ref into `refs/remotes/origin/`, and rename the local base branch to the new name. Configure, validate, and publish then run unchanged for the new branch.
+- **Create only, no cache**: a bare repository `push.git` in the operation folder fetches only the base tip (`--depth=1`), pushes, and is removed when the operation ends, also on success. It is not a checkout, so the no-shallow rule does not apply to it.
+
+Before pushing, the worker lists the server's branches and fails if one equals the new name ignoring case: such pairs cannot coexist in a Windows checkout. The push is `git push --porcelain --force-with-lease=refs/heads/<branch>: origin <commit>:refs/heads/<branch>`. The empty expected value makes the server reject the update if the branch appeared after the listing, so an existing branch is never moved. No notes are pushed: the base commit already has its Mendix metadata. If a later stage fails after the push, the branch stays on the server and the status error says so; a retry is an ordinary checkout of that branch.
+
 ## 6. Cancellation, cleanup, and operational limits
 
 Git children are assigned to a Windows kill-on-close job; closing the worker or disposing the job terminates owned Git processes. The worker checks `cancel.request` during Git output processing and while waiting for locks. It releases locks in `finally`. Requests arriving between launch and a very short Git process exit are handled without treating an already-exited child as a supervision failure.
 
 After an error, the implementation recursively deletes only the staging and cache build folders that the failed operation created (section 3.2). Confirmed cache removal validates ownership, rejects nested reparse points, and deletes only that app's `full.git` and manifest under lock. An invalid/corrupt manifest or structurally invalid cache blocks automatic removal; document/manual inspection is required. No checkout folder is an automatic deletion target.
 
-Trace2 is opt-in because logs can reveal local paths, branch names, and remote details. Ordinary logs redact HTTP URL userinfo and authorization fields, but cannot guarantee that arbitrary credential helpers never print secrets. Review logs before sharing. No telemetry or remote writes are implemented.
+Trace2 is opt-in because logs can reveal local paths, branch names, and remote details. Ordinary logs redact HTTP URL userinfo and authorization fields, but cannot guarantee that arbitrary credential helpers never print secrets. Review logs before sharing. No telemetry is implemented. The only remote write is the create-only branch push of section 5.5.
 
 ## 7. Verification and acceptance matrix
 
@@ -158,6 +172,7 @@ Automated tests use dummy MPR files, so they validate repository mechanics, not 
 | Concurrent same target | Exactly one succeeds; no nested checkout; loser fails safely |
 | Cancellation | Cancelled state and no published target when cancellation precedes work |
 | Naming and roots | Dedicated root wins; invalid UUID rejected; collisions are deterministic |
+| Create branch | New server branch at the current base tip from cache, direct, partial, and create-only paths; download checks out only the new branch with its upstream; an existing name (any case), missing base, or invalid name fails without changing the server; `push.git` is removed |
 
 Manual acceptance still required against a real disposable Mendix branch: open in Studio Pro 10.24.24, confirm Team Server identity, refresh/fetch, view history/metadata, merge a suitable test branch, close/reopen, and verify no unexpected model changes. Repeat with other Studio Pro versions before claiming support. Also exercise an authentication prompt, network interruption, closing a terminal during transfer, cross-volume cache, disk-full failure, and a large repository with optional Trace2. These are not proven by the local fixture suite.
 

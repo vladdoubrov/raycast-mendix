@@ -38,7 +38,7 @@ The three commands in `package.json` (`switch`, `manage-apps`, `versions`) are t
 
 ### Checkout: TypeScript hands off to a PowerShell worker
 
-Clone and cache work runs in `assets/checkout-worker.ps1`, not in the extension process, so it survives Raycast closing. The two sides communicate only through files in `<supportPath>/operations/<uuid>/`:
+Clone, cache, and branch-creation work runs in `assets/checkout-worker.ps1`, not in the extension process, so it survives Raycast closing. The two sides communicate only through files in `<supportPath>/operations/<uuid>/`:
 
 1. `startOperation` in `launch.ts` copies the worker into the operation folder as `worker.ps1`, so a rebuild cannot change a running operation. It then writes `request.json` and an initial `status.json`.
 2. `openPowerShellWindow` starts the snapshot in a visible console. The worker is the authority on locks, Git processes, validation, publishing, and launching Studio Pro.
@@ -56,8 +56,8 @@ Raycast's process has an incomplete environment: `PATH`, `PATHEXT`, and `USERPRO
 
 - **Canonical remote:** keep the exact form `https://git.api.mendix.com/<lowercase uuid>.git/`, including the trailing slash. Studio Pro's credential lookup uses `Uri.IsBaseOf`, so omitting the slash can match another app.
 - **Secrets:** the PAT is only for the repository read API (`Authorization: MxToken`). It must never reach the worker request, a Git URL, or arguments. Git authentication belongs to the credential helper. The optional Jira API token (`src/jira.ts`) goes only to the configured HTTPS Jira site as Basic auth; Jira features must stay hidden when site, email, or token is empty.
-- **User data:** never overwrite an existing target, and never automatically delete checkouts. On failure the worker removes only the `.mx-checkout-*` and `.building-*` folders that the same operation created; operation logs are kept. `deleteLocalCheckout` only recycles folders inside the projects root, after a confirmation.
-- **Remote and clone shape:** implement no remote-mutating Git commands. Do not use `--single-branch`, shallow clones, alternates, or linked worktrees for checkouts.
+- **User data:** never overwrite an existing target, and never automatically delete checkouts. On failure the worker removes only the `.mx-checkout-*` and `.building-*` folders that the same operation created; operation logs are kept. A create-only branch without a cache also removes its own throwaway `push.git` from the operation folder. `deleteLocalCheckout` only recycles folders inside the projects root, after a confirmation.
+- **Remote and clone shape:** the only remote-mutating Git command is the `create-branch` push in the worker: it adds a new branch at a commit the server already has, with `--force-with-lease=refs/heads/<branch>:` so it can never move or replace an existing branch. Add no other pushes, deletes, or ref updates on the server. Do not use `--single-branch`, shallow clones, alternates, or linked worktrees for checkouts.
 - **Git configuration:** do not install Studio Pro/mxunit merge drivers. Set `core.autocrlf=false` before the first materialization rather than repairing line endings afterward.
 - **Tests:** they use disposable local `file:///` Git servers and dummy MPR files, never real Mendix projects. `file:///` remotes are allowed only through the worker's `-AllowLocalTestRemote` switch, which production launches never set.
 - **Legacy scripts:** `scripts/legacy/clone-branch.ps1` and `scripts/legacy/mx-postclone.sh` are stand-alone manual tools. Keep them out of `assets/` (everything there ships to users), do not call them from the extension, and do not copy external scripts over the worker.

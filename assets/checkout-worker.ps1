@@ -36,6 +36,8 @@ $script:cacheLock = $null
 $script:targetLock = $null
 $script:ownedStaging = $null
 $script:ownedBuilding = $null
+$script:ownedPushRepo = $null
+$script:branchCreated = $false
 $script:total = [Diagnostics.Stopwatch]::StartNew()
 $exitCode = 1
 function SafeText([string]$Value) {
@@ -226,11 +228,24 @@ function AssertCache {
     if ((G @('-C',$script:cacheRepo,'rev-parse','--is-bare-repository')) -ne 'true' -or -not (IsFull $script:cacheRepo)) { throw 'Cache is not a complete, independent bare repository.' }
     if ((Config $script:cacheRepo 'remote.origin.url') -cne $script:req.remoteUrl) { throw 'Cache remote does not match this app.' }
 }
+# The only command that changes the server: it adds refs/heads/<branch> at $Commit, which the server already has,
+# so no objects are sent. The lease with an empty expected value makes the server reject the push if the branch
+# exists by then; the listing before it only gives a clearer message, including for names that differ in case.
+function PushNewBranch([string]$Repo, [string]$Commit) {
+    $ref = "refs/heads/$($script:req.branch)"
+    foreach ($line in ((G @('-C',$Repo,'ls-remote','--heads','origin')) -split "`n" | Where-Object { $_ })) {
+        $existing = ($line -split "`t",2)[1]
+        if ($existing -ieq $ref) { throw "Branch '$($existing.Substring('refs/heads/'.Length))' already exists on the server. Nothing was created." }
+    }
+    [void](G @('-C',$Repo,'push','--porcelain',"--force-with-lease=$ref`:",'origin',"$Commit`:$ref"))
+    $script:branchCreated = $true
+    Log "Created branch $($script:req.branch) on the server from $($script:req.baseBranch) at $Commit."
+}
 try {
     $script:req = Get-Content -LiteralPath $RequestFile -Raw -Encoding UTF8 | ConvertFrom-Json
     $script:opDir = Split-Path -Parent ([IO.Path]::GetFullPath($RequestFile))
     if ($req.schemaVersion -ne 1 -or $req.appId -notmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$' -or $req.operationId -notmatch '^[a-f0-9-]{36}$') { throw 'Invalid operation request.' }
-    if ($req.action -notin @('checkout','refresh-cache','remove-cache') -or $req.cloneType -notin @('full','partial')) { throw 'Invalid action or clone type.' }
+    if ($req.action -notin @('checkout','refresh-cache','remove-cache','create-branch') -or $req.cloneType -notin @('full','partial')) { throw 'Invalid action or clone type.' }
     $canonical = "https://git.api.mendix.com/$($req.appId).git/"
     if ($req.remoteUrl -cne $canonical -and -not ($AllowLocalTestRemote -and $req.remoteUrl.StartsWith('file:///'))) { throw 'Remote URL must be the canonical app URL, including its trailing slash.' }
     $script:status = [ordered]@{ schemaVersion=1; operationId=$req.operationId; appId=$req.appId; branch=$req.branch; action=$req.action; state='running'; stage='preflight'; strategy=''; target=$req.target; startedAt=[DateTime]::UtcNow.ToString('o'); updatedAt=''; pid=$PID; processStartedAt=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o'); ready=$false; timings=@{}; elapsedSeconds=0; error=''; mprPath=''; commit='' }
@@ -240,9 +255,18 @@ try {
     if ($req.diagnostics) { $env:GIT_TRACE2_PERF = Join-Path $opDir 'git-trace2-perf.log' }
     Log ('Git version: ' + (G @('--version')))
     Log ('PowerShell: ' + $PSVersionTable.PSVersion.ToString())
-    if ($req.action -eq 'checkout') {
-        if ($req.branch.StartsWith('-')) { throw 'Invalid branch name.' }
-        [void](G @('check-ref-format','--branch',$req.branch))
+    # A new branch is created from its base, so that is the branch the cache or clone must provide.
+    $script:creating = $req.action -eq 'create-branch'
+    $script:materialize = $req.action -eq 'checkout' -or ($creating -and $req.download -ne $false)
+    $script:sourceBranch = if ($creating) { [string]$req.baseBranch } else { $req.branch }
+    if ($req.action -in @('checkout','create-branch')) {
+        foreach ($name in @($req.branch, $sourceBranch)) {
+            if (-not $name -or $name.StartsWith('-')) { throw 'Invalid branch name.' }
+            [void](G @('check-ref-format','--branch',$name))
+        }
+        if ($creating -and $req.branch -ieq $sourceBranch) { throw 'The new branch must differ from its base branch.' }
+    }
+    if ($materialize) {
         AssertPlainPath $req.projectsRoot
         [void][IO.Directory]::CreateDirectory($req.projectsRoot)
         AssertChild $req.target $req.projectsRoot
@@ -258,7 +282,7 @@ try {
         $script:ownedStaging = $staging
         WriteJson (Join-Path $opDir 'ownership.json') @{ staging=$staging; target=$req.target; operationId=$req.operationId }
     }
-    $useCache = ($req.cloneType -eq 'full' -and $req.reuseLocalRepositories) -or $req.action -ne 'checkout'
+    $useCache = ($req.cloneType -eq 'full' -and $req.reuseLocalRepositories) -or $req.action -notin @('checkout','create-branch')
     if ($useCache) {
         AssertPlainPath $req.cacheRoot
         [void][IO.Directory]::CreateDirectory($req.cacheRoot)
@@ -339,7 +363,15 @@ try {
                     SaveManifest
                 }
             }
-            if ($req.action -eq 'checkout') {
+            if ($creating) {
+                Stage 'create-branch' {
+                    $base = G @('-C',$cacheRepo,'rev-parse','--verify',"refs/heads/$sourceBranch^{commit}")
+                    PushNewBranch $cacheRepo $base
+                    # Read the new ref back from the server rather than trusting the push alone.
+                    [void](G @('-C',$cacheRepo,'fetch','origin',"+refs/heads/$($req.branch):refs/heads/$($req.branch)"))
+                }
+            }
+            if ($materialize) {
                 Stage 'materialize-local' {
                     $status.commit = G @('-C',$cacheRepo,'rev-parse','--verify',"refs/heads/$($req.branch)^{commit}")
                     [void](G @('clone','--local','--no-checkout','-c','core.autocrlf=false','-c','core.longpaths=true',"--branch=$($req.branch)",'--',$cacheRepo,$staging))
@@ -349,10 +381,24 @@ try {
             }
         }
         $cacheLock.Dispose(); $script:cacheLock = $null
+    } elseif (-not $materialize) {
+        # Create without download and without a cache: a throwaway repository with only the base commit, enough to
+        # name it in a push. It is not a checkout and is removed when the operation ends.
+        Stage 'create-branch' {
+            $status.strategy = 'direct-create'
+            $pushRepo = Join-Path $opDir 'push.git'
+            if (Test-Path -LiteralPath $pushRepo) { throw 'Push repository already exists; it is not removed because this operation did not create it.' }
+            $script:ownedPushRepo = $pushRepo
+            [void](G @('init','--bare','--quiet','--',$pushRepo))
+            [void](G @('-C',$pushRepo,'remote','add','origin',$req.remoteUrl))
+            [void](G @('-C',$pushRepo,'fetch','--depth=1','--no-tags','--progress','origin',"+refs/heads/$($sourceBranch):refs/heads/$sourceBranch"))
+            PushNewBranch $pushRepo (G @('-C',$pushRepo,'rev-parse','--verify',"refs/heads/$sourceBranch^{commit}"))
+            [void](G @('-C',$pushRepo,'ls-remote','--exit-code','origin',"refs/heads/$($req.branch)"))
+        }
     } else {
         Stage 'clone-remote' {
             $status.strategy = 'direct-' + $req.cloneType
-            $arguments = @('clone','--progress','--no-checkout','-c','core.autocrlf=false','-c','core.longpaths=true',"--branch=$($req.branch)")
+            $arguments = @('clone','--progress','--no-checkout','-c','core.autocrlf=false','-c','core.longpaths=true',"--branch=$sourceBranch")
             if ($req.cloneType -eq 'partial') { $arguments += '--filter=blob:none' }
             $result = Git ($arguments + @('--',$req.remoteUrl,$staging))
             if ($result.Error -match 'filtering not recognized by server, ignoring') {
@@ -361,11 +407,19 @@ try {
                 [void](Git @('-C',$staging,'config','--unset-all','remote.origin.partialclonefilter') -MayFail)
                 Log 'Server ignored the partial filter; completed a full clone.'
             }
-            $status.commit = G @('-C',$staging,'rev-parse','--verify',"refs/remotes/origin/$($req.branch)^{commit}")
+            $status.commit = G @('-C',$staging,'rev-parse','--verify',"refs/remotes/origin/$sourceBranch^{commit}")
         }
         Stage 'fetch-metadata' { [void](G @('-C',$staging,'fetch','--progress','origin','+refs/notes/mx_metadata:refs/notes/mx_metadata')) }
+        if ($creating) {
+            Stage 'create-branch' {
+                PushNewBranch $staging $status.commit
+                [void](G @('-C',$staging,'fetch','origin',"+refs/heads/$($req.branch):refs/remotes/origin/$($req.branch)"))
+                # The clone holds only the base branch locally; renaming it leaves the new branch, as in a normal checkout.
+                [void](G @('-C',$staging,'branch','-m',$sourceBranch,$req.branch))
+            }
+        }
     }
-    if ($req.action -eq 'checkout') {
+    if ($materialize) {
         Stage 'configure-checkout' {
             foreach ($pair in @(@('core.autocrlf','false'),@('core.longpaths','true'),@('mendix.sprintr-project-id',$req.appId),@('mendix.lineEndingResetDone','true'),@('notes.rewriteRef','refs/notes/mx_metadata'),@('notes.rewriteMode','overwrite'),@('notes.rewrite.rebase','true'),@('remote.origin.fetch','+refs/heads/*:refs/remotes/origin/*'))) {
                 [void](G @('-C',$staging,'config','--replace-all',$pair[0],$pair[1]))
@@ -417,6 +471,10 @@ try {
         $status.error = $message
         $status.state = if ($message.StartsWith('CANCELLED:')) { 'cancelled' } elseif ($status.ready) { 'launch_failed' } else { 'failed' }
         Log $message
+        if ($script:branchCreated) {
+            $status.error = "$message Branch $($req.branch) was created on the server; refresh the branch list and clone it from there."
+            Log "Branch $($req.branch) was created on the server before this failure."
+        }
         Log "Existing project folders were preserved. Operation logs are kept in $($script:opDir)."
     } else { Write-Error $message -ErrorAction Continue }
 } finally {
@@ -426,6 +484,8 @@ try {
         RemoveOwnedFolder $script:ownedStaging $req.projectsRoot
         RemoveOwnedFolder $script:ownedBuilding $req.cacheRoot
     }
+    # Removed on success too: it only existed to name the base commit in the push.
+    if ($script:ownedPushRepo -and $script:status) { RemoveOwnedFolder $script:ownedPushRepo $script:opDir }
     if ($script:cacheLock) { $cacheLock.Dispose() }
     if ($script:targetLock) { $targetLock.Dispose() }
     if ($script:status) { SaveStatus }

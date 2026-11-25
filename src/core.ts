@@ -7,6 +7,8 @@ export interface MendixApp {
   name: string;
   /** Optional dedicated local search root for this app (e.g. C:\\Mendix\\MyApp). */
   localRoot?: string;
+  /** Optional icon shown instead of the initials: a copy of the picked image in the extension's support folder. */
+  icon?: string;
 }
 export interface RemoteBranch {
   name: string;
@@ -26,6 +28,14 @@ export interface CombinedBranch {
 
 export function validateAppId(id: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id.trim());
+}
+/** Image types accepted as an app icon, mapped to the extension the stored copy gets. */
+const APP_ICON_TYPES = new Map([[".png", ".png"], [".jpg", ".jpg"], [".jpeg", ".jpg"], [".svg", ".svg"]]);
+export const APP_ICON_MAX_BYTES = 2 * 1024 * 1024;
+/** The extension to store a picked icon under, or undefined if the file type is not supported. */
+export function appIconExtension(file: string): string | undefined {
+  const match = /\.[^.\\/]+$/.exec(file.trim());
+  return match ? APP_ICON_TYPES.get(match[0].toLowerCase()) : undefined;
 }
 export function mergeBranches(remote: RemoteBranch[], local: LocalCheckout[]): CombinedBranch[] {
   const result = new Map<string, CombinedBranch>();
@@ -177,4 +187,26 @@ export function safeCheckoutFolderName(app: MendixApp, branch: string): string {
     return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name) ? `_${name}` : name;
   };
   return `${clean(app.name)}-${clean(branch)}`;
+}
+
+/** New branches always start from the latest commit of this branch on Team Server. */
+export const BASE_BRANCH = "main";
+/**
+ * Why `name` cannot be a new branch, or undefined if it can. Mirrors `git check-ref-format --branch`, which the
+ * worker runs again, and rejects names that differ from an existing branch only in case: Windows stores refs
+ * as files, so such a pair cannot be checked out side by side.
+ */
+export function newBranchNameError(name: string, existing: string[]): string | undefined {
+  if (!name) return "Enter a branch name";
+  if (/\s/.test(name)) return "Branch names cannot contain spaces";
+  if (/[\x00-\x1f\x7f~^:?*[\\]/.test(name)) return "Branch names cannot contain ~ ^ : ? * [ \\ or control characters";
+  if (name.startsWith("-")) return "Branch names cannot start with -";
+  if (name === "@" || name.includes("@{")) return "Branch names cannot be @ or contain @{";
+  if (name.includes("..")) return "Branch names cannot contain ..";
+  if (name.startsWith("/") || name.endsWith("/") || name.includes("//")) return "Branch names cannot start or end with / or contain //";
+  if (name.endsWith(".")) return "Branch names cannot end with .";
+  if (name.split("/").some((part) => part.startsWith(".") || part.endsWith(".lock"))) return "No part of a branch name can start with . or end with .lock";
+  const clash = existing.find((b) => b.toLowerCase() === name.toLowerCase());
+  if (clash) return clash === name ? `Branch ${name} already exists` : `Branch ${clash} already exists (names differ only in case)`;
+  return undefined;
 }

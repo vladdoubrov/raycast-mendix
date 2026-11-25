@@ -3,12 +3,29 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { validateAppId, mergeBranches, findLocalCheckouts, safeCheckoutFolderName, summarizeGitStatus } from '../dist-test/core.cjs';
+import { validateAppId, appIconExtension, mergeBranches, findLocalCheckouts, safeCheckoutFolderName, summarizeGitStatus, newBranchNameError } from '../dist-test/core.cjs';
 
 const ID = '00000000-0000-4000-8000-000000000001';
 test('validates Mendix app UUIDs', () => {
   assert.equal(validateAppId(ID), true);
   assert.equal(validateAppId('not-uuid'), false);
+});
+test('accepts new branch names that Git accepts and that are not taken', () => {
+  const existing = ['main', 'feature/OOMO-1'];
+  for (const ok of ['OOMO-2482', 'feature/OOMO-2482-fix', 'release_10.24', 'feature/café']) assert.equal(newBranchNameError(ok, existing), undefined, ok);
+  for (const bad of ['', 'has space', 'a..b', '-x', 'a/', '/a', 'a//b', 'a.', 'x/.hidden', 'a.lock', 'a.lock/b', 'a~1', 'a^', 'a:b', 'a?', 'a*', 'a[b', 'a\\b', 'a@{1}', '@', 'tab\there']) {
+    assert.ok(newBranchNameError(bad, existing), JSON.stringify(bad));
+  }
+  assert.match(newBranchNameError('main', existing), /already exists/);
+  assert.match(newBranchNameError('Feature/oomo-1', existing), /differ only in case/);
+});
+test('accepts only supported app icon image types', () => {
+  assert.equal(appIconExtension('C:\Logos\app.PNG'), '.png');
+  assert.equal(appIconExtension('C:\Logos\app.jpeg'), '.jpg');
+  assert.equal(appIconExtension('C:\Logos\app.svg'), '.svg');
+  assert.equal(appIconExtension('C:\Logos\app.ico'), undefined);
+  assert.equal(appIconExtension('C:\Logos.png\app'), undefined);
+  assert.equal(appIconExtension('C:\Logos\app.constructor'), undefined);
 });
 test('merges local and remote branches by exact name', () => {
   const b = mergeBranches([{name:'main'},{name:'LDP_MX10'}], [{branch:'main',mprPath:'c',folder:'f'},{branch:'local-only',mprPath:'d',folder:'g'}]);

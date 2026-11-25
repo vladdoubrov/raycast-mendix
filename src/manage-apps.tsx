@@ -1,15 +1,32 @@
-import { Action, ActionPanel, Alert, Form, Icon, Image, List, Toast, confirmAlert, showToast, useNavigation } from "@raycast/api";
+import { Action, ActionPanel, Alert, Form, Icon, Image, List, Toast, confirmAlert, environment, showToast, useNavigation } from "@raycast/api";
 import { useEffect, useState } from "react";
-import { win32 } from "node:path";
-import { MendixApp, validateAppId } from "./core";
+import { existsSync, promises as fs } from "node:fs";
+import { dirname, join, resolve, win32 } from "node:path";
+import { APP_ICON_MAX_BYTES, MendixApp, appIconExtension, validateAppId } from "./core";
 import { getApps, saveApps } from "./storage";
 
-type AppFormValues = { name: string; id: string; localRoot?: string };
+type AppFormValues = { name: string; id: string; localRoot?: string; icon?: string[] };
+
+// A picked icon is copied here, so moving or deleting the original does not break it. Only files in this
+// folder are ever deleted; a stored path elsewhere is left alone.
+const iconFolder = () => join(environment.supportPath, "app-icons");
+const isStoredIcon = (file?: string): file is string => Boolean(file) && dirname(resolve(file!)).toLowerCase() === iconFolder().toLowerCase();
+async function removeStoredIcon(file?: string) {
+  if (isStoredIcon(file)) await fs.rm(file, { force: true }).catch(() => undefined);
+}
+async function storeIcon(appId: string, picked: string, extension: string): Promise<string> {
+  await fs.mkdir(iconFolder(), { recursive: true });
+  // A new name per change, so Raycast does not keep showing a cached image of the previous icon.
+  const target = join(iconFolder(), `${appId}-${Date.now()}${extension}`);
+  await fs.copyFile(picked, target);
+  return target;
+}
 
 // Muted mid tones that keep white initials readable in light and dark themes.
 const AVATAR_COLORS = ["#A8625C", "#A9744E", "#8C7A45", "#5E8466", "#4F8284", "#5873A0", "#76689A", "#93627E"];
-/** Initials on a colour that is stable per app ID, so apps are told apart at a glance. */
+/** The app's own icon if it has one, else initials on a colour that is stable per app ID, so apps are told apart at a glance. */
 export function appIcon(app: MendixApp): Image.ImageLike {
+  if (app.icon && existsSync(app.icon)) return { source: app.icon, mask: Image.Mask.RoundedRectangle };
   const initials = app.name.trim().split(/[\s_-]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("") || "?";
   const text = initials.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const hash = [...app.id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 0);
@@ -23,6 +40,8 @@ export function AppForm({ initial, onSaved }: { initial?: MendixApp; onSaved: ()
   const [nameError, setNameError] = useState<string>();
   const [idError, setIdError] = useState<string>();
   const [localRootError, setLocalRootError] = useState<string>();
+  const [iconError, setIconError] = useState<string>();
+  const currentIcon = initial?.icon && existsSync(initial.icon) ? initial.icon : undefined;
   const submit = async (input: AppFormValues) => {
     const name = input.name.trim();
     const id = input.id.trim().toLowerCase();
@@ -32,12 +51,27 @@ export function AppForm({ initial, onSaved }: { initial?: MendixApp; onSaved: ()
     if (localRoot && !win32.isAbsolute(localRoot)) {
       setLocalRootError("Enter an absolute Windows path (for example C:\\Mendix\\MyApp)"); return;
     }
+    const picked = input.icon?.[0];
+    const iconChanged = picked !== currentIcon;
+    const extension = picked && iconChanged ? appIconExtension(picked) : undefined;
+    if (picked && iconChanged) {
+      if (!extension) { setIconError("Choose a PNG, JPG, or SVG image"); return; }
+      const size = await fs.stat(picked).then((s) => (s.isFile() ? s.size : -1), () => -1);
+      if (size < 0) { setIconError("The file cannot be read"); return; }
+      if (size > APP_ICON_MAX_BYTES) { setIconError("Choose an image of at most 2 MB"); return; }
+    }
     const apps = await getApps();
     if (!initial && apps.some((a) => a.id.toLowerCase() === id)) {
       setIdError("This app is already in the switcher"); return;
     }
-    const updated: MendixApp = { id, name, ...(localRoot ? { localRoot } : {}) };
+    let icon = picked ? currentIcon : undefined;
+    if (picked && extension) {
+      try { icon = await storeIcon(id, picked, extension); }
+      catch (e) { setIconError(`Could not copy the image: ${String(e)}`); return; }
+    }
+    const updated: MendixApp = { id, name, ...(localRoot ? { localRoot } : {}), ...(icon ? { icon } : {}) };
     await saveApps(initial ? apps.map((a) => (a.id === initial.id ? updated : a)) : [...apps, updated]);
+    if (initial?.icon !== icon) await removeStoredIcon(initial?.icon);
     onSaved();
     await showToast({ style: Toast.Style.Success, title: initial ? "App updated" : "App added", message: name });
     pop();
@@ -50,6 +84,9 @@ export function AppForm({ initial, onSaved }: { initial?: MendixApp; onSaved: ()
       <Form.TextField id="name" title="Name" placeholder="My App" defaultValue={initial?.name} error={nameError} onChange={() => setNameError(undefined)} />
       <Form.TextField id="id" title="Mendix Project ID" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" defaultValue={initial?.id} error={idError} onChange={() => setIdError(undefined)} />
       <Form.TextField id="localRoot" title="Dedicated Local Root" placeholder="Optional, e.g. C:\\Mendix\\MyApp" defaultValue={initial?.localRoot} error={localRootError} onChange={() => setLocalRootError(undefined)} />
+      <Form.FilePicker id="icon" title="Icon" allowMultipleSelection={false} canChooseDirectories={false}
+        defaultValue={currentIcon ? [currentIcon] : []} error={iconError} onChange={() => setIconError(undefined)}
+        info="Optional PNG, JPG, or SVG image (at most 2 MB) shown instead of the initials. Clear it to go back to the initials." />
       <Form.Description text="Find the Project ID in Mendix Developer Portal → app Settings → General. A dedicated local root is optional; otherwise checkouts are discovered under the global Projects Root using the Git remote's app ID." />
     </Form>
   );
@@ -68,6 +105,7 @@ export function ManageApps({ onSaved }: { onSaved?: () => void }) {
     });
     if (!ok) return;
     await saveApps((await getApps()).filter((a) => a.id !== app.id));
+    await removeStoredIcon(app.icon);
     await refresh();
   };
   return (

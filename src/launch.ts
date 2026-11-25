@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { randomUUID } from "node:crypto";
-import { LocalCheckout, MendixApp, findLocalCheckouts, summarizeGitStatus } from "./core";
+import { BASE_BRANCH, LocalCheckout, MendixApp, findLocalCheckouts, summarizeGitStatus } from "./core";
 import { CheckoutPreferences, CheckoutRequest, CloneType, OperationAction, cacheDirectory, canonicalRemote, checkoutTarget, projectRoot } from "./checkout";
 
 export type Config = CheckoutPreferences & {
@@ -158,6 +158,16 @@ export async function cloneAndOpenTerminal(app: MendixApp, branch: string): Prom
   await startOperation(app, branch, "checkout", undefined, undefined, "terminal");
 }
 
+/** What a finished checkout opens: Studio Pro, a terminal in the folder, or nothing. */
+export type AfterCheckout = "studio-pro" | "terminal" | "none";
+/**
+ * Creates `branch` on Team Server from the latest commit of the base branch, then checks it out and opens it like a
+ * clone, unless `download` is false. `executable` opens it with that Studio Pro instead of the configured one.
+ */
+export async function createBranch(app: MendixApp, branch: string, download: boolean, then: AfterCheckout = "studio-pro", executable?: string): Promise<void> {
+  await startOperation(app, branch, "create-branch", undefined, executable, then, { baseBranch: BASE_BRANCH, download });
+}
+
 const exists = (path: string) => fs.stat(path).then(() => true, () => false);
 
 function runGit(folder: string, args: string[]): Promise<string | undefined> {
@@ -283,13 +293,14 @@ export async function cacheOperation(app: MendixApp, action: "refresh-cache" | "
   await startOperation(app, "", action, "full");
 }
 
-/** `then` is what a finished checkout opens: Studio Pro, a terminal in the folder, or nothing. */
+/** `then` is what a finished checkout opens; `create` names the base of a new branch and whether to download it. */
 async function startOperation(app: MendixApp, branch: string, action: OperationAction, mode?: CloneType, executable?: string,
-  then: "studio-pro" | "terminal" | "none" = "studio-pro"): Promise<void> {
+  then: AfterCheckout = "studio-pro", create?: { baseBranch: string; download: boolean }): Promise<void> {
   const cfg = getConfig();
   try {
     const parent = projectRoot(app, cfg);
-    const target = action === "checkout" ? await checkoutTarget(app, branch, parent) : "";
+    const materialize = action === "checkout" || (action === "create-branch" && create?.download === true);
+    const target = materialize ? await checkoutTarget(app, branch, parent) : "";
     const operationId = randomUUID();
     const directory = join(environment.supportPath, "operations", operationId);
     await fs.mkdir(directory, { recursive: true });
@@ -306,7 +317,8 @@ async function startOperation(app: MendixApp, branch: string, action: OperationA
       cacheRoot: cacheDirectory(app, cfg), cloneType, reuseLocalRepositories: reuse,
       seeds: [...new Set(seeds)], diagnostics: cfg.detailedCloneDiagnostics === true,
       studioProExecutable: executable ?? cfg.studioProExecutable?.trim() ?? "",
-      launch: then === "studio-pro", openTerminal: then === "terminal",
+      launch: materialize && then === "studio-pro", openTerminal: materialize && then === "terminal",
+      ...(create ? { baseBranch: create.baseBranch, download: create.download } : {}),
     };
     const requestFile = join(directory, "request.json");
     await fs.writeFile(requestFile, JSON.stringify(request, null, 2));
@@ -316,8 +328,10 @@ async function startOperation(app: MendixApp, branch: string, action: OperationA
     const toast = await showToast({ style: Toast.Style.Animated, title: "Opening operation terminal" });
     try {
       await openPowerShellWindow(script, { MX_CHECKOUT_REQUEST: requestFile });
-      toast.style = Toast.Style.Success; toast.title = "Operation started in PowerShell";
-      toast.message = "View Checkout Operations for status, logs, and cancellation.";
+      toast.style = Toast.Style.Success;
+      toast.title = action === "create-branch" ? `Creating ${branch} in PowerShell` : "Operation started in PowerShell";
+      toast.message = action === "create-branch" ? "Refresh the branch list (Ctrl+R) once the window says it is done."
+        : "View Checkout Operations for status, logs, and cancellation.";
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       toast.style = Toast.Style.Failure; toast.title = "Could not open operation terminal"; toast.message = message;

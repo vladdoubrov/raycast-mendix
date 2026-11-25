@@ -36,7 +36,7 @@ The extension now shows up in Raycast and stays there after you stop `npm run de
    - **Personal Access Token**: the token from step 1.
    - **Local Projects Root**: the folder with your Studio Pro projects, e.g. `C:\Mendix`. New clones go here too.
    - **Studio Pro Executable** (optional): a fixed `studiopro.exe`. Without it, projects open with the Windows `.mpr` association.
-3. **Add your apps.** Run **Manage Mendix Apps** → **Add App** with a name and the Project ID (Portal → app → Settings → General).
+3. **Add your apps.** Run **Manage Mendix Apps** → **Add App** with a name and the Project ID (Portal → app → Settings → General). Optionally pick an **Icon** (PNG, JPG, or SVG) to show instead of the app's initials.
 4. **Clone once to sign in.** On your first clone, Git asks for credentials: user name `pat`, password your token. Windows remembers them.
 5. **Optional: connect Jira Cloud.** Fill in **Jira Site** (e.g. `yourcompany.atlassian.net`), **Jira Email**, and **Jira API Token** (a classic token from id.atlassian.com → Security → API tokens). Branches named after an issue (`OOMO-2482`, `feature/OOMO-2482-fix`) then show the issue summary and status, and you can filter the list to issues that are or are not Done. **Jira Project Keys** (e.g. `OOMO`) limits detection to those projects and also matches lower-case branch names. Leave the Jira fields empty to hide all of this.
 
@@ -51,7 +51,10 @@ The extension now shows up in Raycast and stays there after you stop `npm run de
 | `Ctrl+T` | Open the folder in a terminal | Clone, then open the folder in a terminal |
 | `Ctrl+G` | Show uncommitted and unpushed changes | |
 | `Ctrl+J` | Open the branch's Jira issue (if Jira is set up) | Same |
+| `Ctrl+N` | Create a new branch from the latest `main` | Same |
 | `Ctrl+R` | Refresh | Refresh |
+
+**Create Branch…** (`Ctrl+N`, also on the app list) asks for a name and creates the branch on Team Server from the latest commit of `main`. By default it then downloads the branch and opens it in Studio Pro; you can instead open it in a terminal, only download it, or only create it on the server.
 
 More in the action menu (`Ctrl+K`): clone without opening, partial clone, delete a local copy (to the Recycle Bin), and **View Checkout Operations** for clone progress and logs.
 
@@ -61,7 +64,7 @@ More in the action menu (`Ctrl+K`): clone without opening, partial clone, delete
 
 - **Clones run in a PowerShell window**, so they continue if Raycast closes. Each app gets a cache (`.mendix-switcher-cache` in your projects root), which makes later clones of the same app fast.
 - **Clones are set up like Studio Pro's own downloads** (line endings, Mendix metadata, all branches). Mendix still officially supports only downloads made by Studio Pro; **Download via Studio Pro (Assisted)** in the action menu is the official route.
-- **Nothing is overwritten.** A failed clone removes its own temporary folder and keeps its logs.
+- **Nothing is overwritten.** A failed clone removes its own temporary folder and keeps its logs. Creating a branch is the only thing that writes to Team Server, and it fails if a branch with that name (in any letter case) already exists.
 - **Your token** is only sent to Mendix's repository API to list branches. Git uses its own stored credentials. The optional Jira token is only sent to your Jira site. No telemetry.
 
 ## Troubleshooting

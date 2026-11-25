@@ -14,7 +14,7 @@ const appId = '00000000-0000-4000-8000-000000000001';
 const ps = process.env.MX_TEST_POWERSHELL || 'powershell.exe';
 const git = async (dir, ...args) => (await exec('git', ['-C', dir, ...args], { windowsHide: true, env: { ...process.env, GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' } })).stdout.trim();
 
-test('worker integration: full, warm, seeded, partial, cancellation and safe failure', { skip: process.platform !== 'win32', timeout: 240000 }, async t => {
+test('worker integration: full, warm, seeded, partial, branch creation, cancellation and safe failure', { skip: process.platform !== 'win32', timeout: 420000 }, async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'mx-worker-test-'));
   const source = path.join(root, 'source');
   const remote = path.join(root, 'remote.git');
@@ -119,6 +119,64 @@ test('worker integration: full, warm, seeded, partial, cancellation and safe fai
       await git(direct.request.target, 'fetch', 'origin');
       await git(direct.request.target, 'merge', '--ff-only', 'origin/main');
       assert.equal(await readFile(path.join(direct.request.target, 'new-file.txt'), 'utf8'), 'remote update\n');
+    });
+    const create = (branch, overrides = {}) => run({ action: 'create-branch', branch, baseBranch: 'main', download: true, ...overrides });
+    const remoteRef = (branch) => git(remote, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`).catch(() => '');
+    async function assertNewBranchCheckout(result, branch, mainTip) {
+      success(result);
+      assert.equal(await remoteRef(branch), mainTip);
+      const target = result.request.target;
+      assert.equal(await git(target, 'symbolic-ref', '--short', 'HEAD'), branch);
+      assert.equal(await git(target, 'rev-parse', 'HEAD'), mainTip);
+      assert.equal(await git(target, 'rev-parse', '--abbrev-ref', '@{upstream}'), `origin/${branch}`);
+      assert.equal(await git(target, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/'), branch);
+      assert.equal(await git(target, 'status', '--porcelain'), '');
+      assert.match(await git(target, 'notes', '--ref=mx_metadata', 'list'), /\S/);
+    }
+    await t.test('create-branch from the cache pushes the latest main and checks out the new branch', async () => {
+      const mainTip = await git(remote, 'rev-parse', 'refs/heads/main');
+      const created = await create('feature/new-cached');
+      await assertNewBranchCheckout(created, 'feature/new-cached', mainTip);
+      assert.equal(created.status.strategy, 'warm-full-cache');
+      assert.equal(await git(cacheRoot + '/full.git', 'rev-parse', 'refs/heads/feature/new-cached'), mainTip);
+    });
+    await t.test('create-branch direct and partial clones check out the new branch', async () => {
+      const mainTip = await git(remote, 'rev-parse', 'refs/heads/main');
+      await assertNewBranchCheckout(await create('feature/new-direct', { reuseLocalRepositories: false }), 'feature/new-direct', mainTip);
+      await assertNewBranchCheckout(await create('feature/new-partial', { cloneType: 'partial' }), 'feature/new-partial', mainTip);
+    });
+    await t.test('create-branch without download creates only the server branch', async () => {
+      const mainTip = await git(remote, 'rev-parse', 'refs/heads/main');
+      const before = await readdir(projectsRoot);
+      const cached = await create('feature/server-only-cached', { download: false, target: '' });
+      success(cached); assert.equal(cached.status.ready, false);
+      assert.equal(await remoteRef('feature/server-only-cached'), mainTip);
+      const direct = await create('feature/server-only-direct', { download: false, target: '', reuseLocalRepositories: false });
+      success(direct); assert.equal(direct.status.strategy, 'direct-create');
+      assert.equal(await remoteRef('feature/server-only-direct'), mainTip);
+      await assert.rejects(access(path.join(direct.directory, 'push.git')));
+      assert.deepEqual(await readdir(projectsRoot), before);
+    });
+    await t.test('create-branch never moves an existing branch or creates from a missing base', async () => {
+      await git(source, 'commit', '--allow-empty', '-m', 'advance main again');
+      await git(source, 'push', remote, 'main');
+      const existing = await remoteRef('feature/new-cached');
+      for (const [name, overrides] of [['feature/new-cached', {}], ['Feature/New-Cached', {}], ['feature/new-cached', { reuseLocalRepositories: false }],
+        ['feature/new-cached', { download: false, target: '', reuseLocalRepositories: false }]]) {
+        const failed = await create(name, overrides);
+        assert.equal(failed.status.state, 'failed', failed.output);
+        assert.match(failed.status.error, /already exists on the server/);
+        if (failed.request.target) await assert.rejects(access(failed.request.target));
+      }
+      assert.equal(await remoteRef('feature/new-cached'), existing);
+      // Listed, not resolved: on a case-insensitive disk a loose ref resolves under any casing.
+      assert.doesNotMatch(await git(remote, 'for-each-ref', '--format=%(refname)', 'refs/heads/'), /refs\/heads\/Feature\/New-Cached/);
+      const noBase = await create('feature/no-base', { baseBranch: 'does-not-exist' });
+      assert.equal(noBase.status.state, 'failed');
+      assert.equal(await remoteRef('feature/no-base'), '');
+      const invalid = await create('bad..name');
+      assert.equal(invalid.status.state, 'failed');
+      assert.equal(invalid.status.stage, 'preflight');
     });
     await t.test('unsupported filtering is recorded as full fallback', async () => {
       await git(remote, 'config', 'uploadpack.allowFilter', 'false');

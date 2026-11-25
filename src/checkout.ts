@@ -4,7 +4,8 @@ import { join, resolve } from "node:path";
 import { MendixApp, safeCheckoutFolderName, validateAppId } from "./core";
 
 export type CloneType = "full" | "partial";
-export type OperationAction = "checkout" | "refresh-cache" | "remove-cache";
+/** "create-branch" pushes `branch` as a new server branch at the tip of `baseBranch`, then optionally checks it out. */
+export type OperationAction = "checkout" | "refresh-cache" | "remove-cache" | "create-branch";
 export interface CheckoutPreferences {
   projectsRoot?: string;
   repositoryCacheRoot?: string;
@@ -32,6 +33,10 @@ export interface CheckoutRequest {
   launch: boolean;
   /** True opens a terminal in the published checkout folder. */
   openTerminal: boolean;
+  /** create-branch only: the server branch whose latest commit the new branch starts from. */
+  baseBranch?: string;
+  /** create-branch only: false creates the branch on the server without a local checkout (`target` is empty). */
+  download?: boolean;
 }
 export interface OperationStatus {
   schemaVersion: 1;

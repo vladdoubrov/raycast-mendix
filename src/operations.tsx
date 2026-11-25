@@ -40,7 +40,7 @@ export function Operations({ app }: { app: MendixApp }) {
     </List.Section>
     <List.Section title="Recent operations" subtitle="Latest 20; status refreshes every 2 seconds">
       {operations.map(op => <List.Item key={op.operationId} title={op.branch || op.action}
-        subtitle={`${op.state} · ${op.stage}${op.strategy ? ` · ${op.strategy}` : ""}`}
+        subtitle={`${op.action === "create-branch" ? "new branch · " : ""}${op.state} · ${op.stage}${op.strategy ? ` · ${op.strategy}` : ""}`}
         icon={{ value: STATE_ICONS[op.state] ?? Icon.Clock, tooltip: op.state }}
         accessories={[{ text: op.error ? op.error.slice(0, 100) : new Date(op.startedAt).toLocaleString() }]}
         actions={<ActionPanel>

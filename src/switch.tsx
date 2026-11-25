@@ -1,6 +1,7 @@
 import { Action, ActionPanel, Color, Icon, Keyboard, List, Toast, openExtensionPreferences, showToast } from "@raycast/api";
 import { useEffect, useMemo, useState } from "react";
 import { CombinedBranch, LocalCheckout, MendixApp, RemoteBranch, fetchRemoteBranches, findLocalCheckouts, mergeBranches } from "./core";
+import { CreateBranchForm } from "./create-branch";
 import { GitChangesView } from "./git-changes";
 import { useStudioProInstalls } from "./hooks";
 import { assistedCheckout, cloneAndOpen, cloneAndOpenTerminal, cloneOnly, deleteLocalCheckout, getConfig, openLocal, openTerminal, studioProIcon } from "./launch";
@@ -92,6 +93,8 @@ function Branches({ app, studioPro }: { app: MendixApp; studioPro?: StudioProIns
     return remaining;
   });
   const removeLocal = async (checkout: LocalCheckout) => { if (await deleteLocalCheckout(app, checkout)) forgetLocal(checkout); };
+  const createAction = <Action.Push title="Create Branch…" icon={Icon.Plus} shortcut={Keyboard.Shortcut.Common.New}
+    target={<CreateBranchForm app={app} existing={remote.map((b) => b.name)} studioPro={studioPro} />} />;
   const copyLabel = (branch: CombinedBranch, index: number) => branch.local.length > 1 ? `Local Copy ${index + 1}` : "";
   const actions = (branch: CombinedBranch) => (
     <ActionPanel>
@@ -135,6 +138,7 @@ function Branches({ app, studioPro }: { app: MendixApp; studioPro?: StudioProIns
       {branch.remote && <Action title="Partial Clone (On-Demand Files)" icon={Icon.Bolt} onAction={() => void cloneAndOpen(app, branch.name, "partial", studioPro?.executable)} />}
       {branch.remote && <Action title="Download via Studio Pro (Assisted)" icon={studioProIcon()}
         onAction={() => void assistedCheckout(app, branch.name)} />}
+      {createAction}
       <Action.CopyToClipboard title="Copy Branch Name" content={branch.name} />
       {jira && issueKeyOf(branch) && <Action.OpenInBrowser title={`Open ${issueKeyOf(branch)} in Jira`} icon={Icon.Link}
         url={jiraIssueUrl(jira.siteUrl, issueKeyOf(branch)!)} shortcut={{ modifiers: ["ctrl"], key: "j" }} />}
@@ -203,7 +207,7 @@ function Branches({ app, studioPro }: { app: MendixApp; studioPro?: StudioProIns
       ) : undefined}>
       <List.EmptyView title={loadingLocal || loadingRemote ? "Loading branches…" : "No branches found"}
         description={remoteError || (config.projectsRoot || app.localRoot ? "Check the Git origin and local folder settings." : "Set a Projects Root and a Mendix PAT in extension settings.")}
-        actions={<ActionPanel><Action title="Refresh Branches" onAction={() => setRefreshId((n) => n + 1)} /><Action title="Open Settings" onAction={() => void openExtensionPreferences()} /></ActionPanel>} />
+        actions={<ActionPanel><Action title="Refresh Branches" onAction={() => setRefreshId((n) => n + 1)} />{createAction}<Action title="Open Settings" onAction={() => void openExtensionPreferences()} /></ActionPanel>} />
       {remoteError && <List.Section title="Remote API status">
         <List.Item title={remote.length ? "Could not refresh remote branches; showing the saved list" : "Remote branches unavailable"}
           subtitle={remoteError} icon={Icon.ExclamationMark}
@@ -237,6 +241,8 @@ export function AppList({ studioPro }: { studioPro?: StudioProInstall }) {
         <List.Item key={app.id} title={app.name} subtitle={app.id} icon={appIcon(app)}
           actions={<ActionPanel>
             <Action.Push title="Show Branches" icon={Icon.Folder} target={<Branches app={app} studioPro={studioPro} />} />
+            <Action.Push title="Create Branch…" icon={Icon.Plus} shortcut={Keyboard.Shortcut.Common.New}
+              target={<CreateBranchForm app={app} existing={getCachedRemote(app.id)?.items.map((b) => b.name) ?? []} studioPro={studioPro} />} />
             <Action.Push title="View Checkout Operations" icon={Icon.Terminal} target={<Operations app={app} />} />
             <Action.Push title="Manage Apps" icon={Icon.Gear} target={<ManageApps onSaved={() => void refreshApps()} />} />
             <Action.Push title="Add Mendix App" icon={Icon.Plus} target={<AppForm onSaved={() => void refreshApps()} />} />
